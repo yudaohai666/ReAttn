@@ -1,0 +1,1263 @@
+"""Cross-layer block-selection reuse.
+
+Scheme (per Transformer layer, processed in order 0..L-1):
+
+* A layer's **full** KV heads run a dense flash-attention that *also* emits exact
+  per-(q_block, k_block) attention scores as a near-free byproduct (block-sparse
+  kernel family with an extra ``lse_mass`` scratch, defined locally in this file).
+  The scores are aggregated across the full heads and reduced by ``topk(budget)``
+  per query block into a shared block mask.
+* That mask becomes the "most recent full-head selection". The layer's **sparse**
+  KV heads attend only to those selected blocks (via the same local kernel with
+  ``EMIT_SCORE=False``).
+* A layer with **no** full KV head carries the selection forward from the nearest
+  previous full-head layer.
+
+Granularity is per **KV head** (native GQA). Q is ``(b, H, s, d)`` with H q-heads;
+K/V are ``(b, Hkv, s, d)`` with Hkv kv-heads (G = H // Hkv). ``full_head`` is a
+``(Hkv,)`` bool flag; each full/sparse kv-head is mapped to its G contiguous
+q-heads (repeat_interleave layout). The block-sparse kernel handles the group
+mapping via ``num_kv_groups``, so K/V never need to be expanded to H. MHA is the
+G = 1 special case. The block selection is over the KV sequence, shared within a
+group anyway.
+"""
+
+import math
+import os
+import torch
+import triton
+import triton.language as tl
+
+
+# --------------------------------------------------------------------------- #
+# Autotune configuration for the local block-sparse kernel (self-contained; no
+# dependency on pbs_attn.src.kernels). BLOCK_M/BLOCK_N must both divide
+# LOGICAL_BLOCK_SIZE.
+# --------------------------------------------------------------------------- #
+def _prune_invalid_configs(configs, named_args, **kwargs):
+    logical_bs = kwargs.get('LOGICAL_BLOCK_SIZE', None)
+    if logical_bs is None:
+        logical_bs = named_args.get('LOGICAL_BLOCK_SIZE', None)
+    try:
+        logical_bs = int(logical_bs)
+    except Exception:
+        logical_bs = None
+    if logical_bs is None or logical_bs <= 0:
+        return configs
+    pruned = []
+    for conf in configs:
+        bm = conf.kwargs.get('BLOCK_M', 0)
+        bn = conf.kwargs.get('BLOCK_N', 0)
+        if bm == 0 or bn == 0:
+            continue
+        if (logical_bs % bm == 0) and (logical_bs % bn == 0):
+            pruned.append(conf)
+    return pruned
+
+
+_BLOCK_SPARSE_FULL_AUTOTUNE_CONFIGS = [
+    triton.Config({'BLOCK_M': 32, 'BLOCK_N': 64, 'num_warps': 4, 'num_stages': 2}),
+    triton.Config({'BLOCK_M': 64, 'BLOCK_N': 32, 'num_warps': 4, 'num_stages': 2}),
+    triton.Config({'BLOCK_M': 64, 'BLOCK_N': 64, 'num_warps': 4, 'num_stages': 2}),
+    triton.Config({'BLOCK_M': 64, 'BLOCK_N': 64, 'num_warps': 8, 'num_stages': 2}),
+    triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'num_warps': 4, 'num_stages': 2}),
+    triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'num_warps': 4, 'num_stages': 2}),
+    triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'num_warps': 8, 'num_stages': 2}),
+    triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'num_warps': 8, 'num_stages': 3}),
+    triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'num_warps': 8, 'num_stages': 3}),
+]
+_BLOCK_SPARSE_FIXED_CONFIG = [
+    triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'num_warps': 8, 'num_stages': 2}),
+]
+_BLOCK_SPARSE_NO_AUTOTUNE = os.environ.get("BLOCK_SPARSE_NO_AUTOTUNE", "false").lower() in ("1", "true", "yes")
+_BLOCK_SPARSE_FULL_AUTOTUNE = os.environ.get("BLOCK_SPARSE_FULL_AUTOTUNE", "true").lower() in ("1", "true", "yes")
+
+
+# --------------------------------------------------------------------------- #
+# Full-head dense block-sparse forward that ALSO emits exact per-(q_block,k_block)
+# scores.
+#
+# Standard online-softmax attention (no permutation, contiguous K/V loads); on top
+# of the main pass each query row keeps a per-logical-block log-sum-exp
+# (``lse_mass``, absolute, i.e. NOT reduced by the running max, so it is
+# independent of m_i/l_i and does not perturb the output). BLOCK_N sub-tiles inside
+# one LOGICAL_BLOCK_SIZE are merged with log-sum-exp; the block boundary flushes
+# ``lse_mass`` to an HBM scratch. A cheap reduce turns the scratch into
+# ``score[qb,kb] = sum_row exp2(lse_mass[row,kb] - LSE2[row])``.
+# --------------------------------------------------------------------------- #
+@triton.jit
+def _block_sparse_score_fwd_inner(
+    acc, l_i, m_i,
+    q,
+    qo_len,
+    kv_len,
+    K_ptrs,
+    V_ptrs,
+    K_block_indices_ptrs,
+    Mass_base,
+    stride_mass_row, stride_mass_blk,
+    MASS_ROW_BASE,
+    pid_seq,
+    RANGE_Q_SEQ,
+    softmax_scale,
+    dtype: tl.constexpr,
+    BLOCK_M: tl.constexpr,
+    HEAD_DIM: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    SEGMENT_SIZE: tl.constexpr,
+    LOGICAL_BLOCK_SIZE: tl.constexpr,
+    STAGE: tl.constexpr,
+    EMIT_SCORE: tl.constexpr,
+):
+    segment_id = (pid_seq * BLOCK_M) // SEGMENT_SIZE
+    if STAGE == 1:
+        lo, hi = 0, (segment_id * SEGMENT_SIZE)
+    elif STAGE == 2:
+        lo = segment_id * SEGMENT_SIZE
+        hi = tl.minimum(lo + SEGMENT_SIZE, kv_len)
+    elif STAGE == 3:
+        lo, hi = 0, kv_len
+
+    # Contiguous K/V block loads (no permutation): advance to the segment start.
+    K_ptrs = tl.advance(K_ptrs, (lo, 0))
+    V_ptrs = tl.advance(V_ptrs, (lo, 0))
+    q_pos = RANGE_Q_SEQ  # (BLOCK_M,) absolute query positions (identity)
+
+    if EMIT_SCORE:
+        # per-row logical-block log-sum-exp accumulators (absolute)
+        blk_m = tl.zeros((BLOCK_M,), dtype=tl.float32) - float("inf")
+        blk_l = tl.zeros((BLOCK_M,), dtype=tl.float32)
+        # causal/K use absolute RANGE_Q_SEQ; the mass scratch may be a per-chunk
+        # buffer, so store at the chunk-local row (absolute row - MASS_ROW_BASE).
+        mass_row_offsets = (RANGE_Q_SEQ - MASS_ROW_BASE) * stride_mass_row
+        mass_row_valid = RANGE_Q_SEQ < qo_len
+
+    if not (STAGE == 1 and segment_id == 0):
+        for kv_seq_start in range(lo, hi, BLOCK_N):
+            k_block_idx = tl.load(K_block_indices_ptrs + kv_seq_start // LOGICAL_BLOCK_SIZE)
+            if k_block_idx:
+                offs_n = kv_seq_start + tl.arange(0, BLOCK_N)  # absolute key positions
+                k = tl.load(K_ptrs, boundary_check=(0, 1), padding_option="zero").to(dtype)
+                qk = tl.dot(q, tl.trans(k))
+                qk *= softmax_scale
+
+                kv_mask = offs_n[None, :] >= kv_len  # True if out of bounds
+                if STAGE == 2:
+                    kv_mask |= (q_pos[:, None] < offs_n[None, :])  # causal
+                qk = qk + tl.where(kv_mask, -1e6, 0)
+                local_m = tl.max(qk, 1)
+
+                # --- main online softmax ---
+                m_ij = tl.maximum(m_i, local_m)
+                qk -= m_ij[:, None]
+
+                p = tl.math.exp2(qk)
+                l_ij = tl.sum(p, 1)
+                alpha = tl.math.exp2(m_i - m_ij)
+
+                acc = acc * alpha[:, None]
+                v = tl.load(V_ptrs, boundary_check=(0, 1), padding_option="zero").to(dtype)
+                p = p.to(dtype)
+
+                acc += tl.dot(p, v)
+                l_i = l_i * alpha + l_ij
+                m_i = m_ij
+
+                if EMIT_SCORE:
+                    # block score: reuse main-softmax (m_ij, l_ij) as this tile's
+                    # (base, mass); absolute mass is basis-independent, so no extra
+                    # exp2/reduce. Merge into the logical-block lse accumulator.
+                    new_blk_m = tl.maximum(blk_m, m_ij)
+                    blk_l = (blk_l * tl.math.exp2(blk_m - new_blk_m)
+                             + l_ij * tl.math.exp2(m_ij - new_blk_m))
+                    blk_m = new_blk_m
+                    if (kv_seq_start % LOGICAL_BLOCK_SIZE) == (LOGICAL_BLOCK_SIZE - BLOCK_N):
+                        # last sub-tile of this logical block -> flush lse_mass to HBM
+                        lse_mass = tl.where(blk_l > 0.0, blk_m + tl.math.log2(blk_l),
+                                            -float("inf"))
+                        logical_k_block = kv_seq_start // LOGICAL_BLOCK_SIZE
+                        tl.store(
+                            Mass_base + logical_k_block * stride_mass_blk + mass_row_offsets,
+                            lse_mass, mask=mass_row_valid,
+                        )
+                        blk_m = tl.zeros((BLOCK_M,), dtype=tl.float32) - float("inf")
+                        blk_l = tl.zeros((BLOCK_M,), dtype=tl.float32)
+
+            K_ptrs = tl.advance(K_ptrs, (BLOCK_N, 0))
+            V_ptrs = tl.advance(V_ptrs, (BLOCK_N, 0))
+
+    return acc, l_i, m_i
+
+
+@triton.autotune(
+    configs=(
+        _BLOCK_SPARSE_FULL_AUTOTUNE_CONFIGS
+        if _BLOCK_SPARSE_FULL_AUTOTUNE and not _BLOCK_SPARSE_NO_AUTOTUNE
+        else _BLOCK_SPARSE_FIXED_CONFIG
+    ),
+    key=[
+        'autotune_h',
+        'autotune_head_dim',
+        'autotune_logical_block_size',
+        'autotune_segment_size',
+        'autotune_num_kv_groups',
+    ],
+    prune_configs_by={'early_config_prune': _prune_invalid_configs},
+)
+@triton.jit
+def _block_sparse_score_fwd(
+    Q, K, V, O,
+    K_block_indices,
+    Mass, LSE2,
+    stride_bz_q, stride_h_q, stride_seq_q, stride_d_q,
+    stride_bz_k, stride_h_k, stride_seq_k, stride_d_k,
+    stride_bz_v, stride_h_v, stride_seq_v, stride_d_v,
+    stride_bz_o, stride_h_o, stride_seq_o, stride_d_o,
+    stride_bz_k_block_indices, stride_h_k_block_indices, stride_seqq_k_block_indices, stride_seqk_k_block_indices,
+    stride_mass_bz, stride_mass_h, stride_mass_row, stride_mass_blk,
+    stride_lse2_bz, stride_lse2_h, stride_lse2_row,
+    qo_len, kv_len,
+    softmax_scale,
+    q_row_offset,
+    autotune_h,
+    autotune_head_dim,
+    autotune_logical_block_size,
+    autotune_segment_size,
+    autotune_num_kv_groups,
+    H: tl.constexpr,
+    num_kv_groups: tl.constexpr,
+    HEAD_DIM: tl.constexpr,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    SEGMENT_SIZE: tl.constexpr,
+    LOGICAL_BLOCK_SIZE: tl.constexpr,
+    STAGE: tl.constexpr,
+    EMIT_SCORE: tl.constexpr,
+):
+    tl.static_assert((LOGICAL_BLOCK_SIZE % BLOCK_M) == 0)
+    tl.static_assert((LOGICAL_BLOCK_SIZE % BLOCK_N) == 0)
+    pid_seq = tl.program_id(0)
+    pid_h = tl.program_id(1).to(tl.int64)
+    pid_bz = tl.program_id(2).to(tl.int64)
+
+    # query chunking: the grid covers this chunk's q-blocks starting at 0, but the
+    # absolute q position is offset by q_row_offset rows (a multiple of BLOCK_M).
+    # Causal masking, Q/K/V/O loads and the block_mask index all use the ABSOLUTE
+    # position; only the mass/lse2 scratch is indexed chunk-locally (MASS_ROW_BASE).
+    abs_pid_seq = pid_seq + q_row_offset // BLOCK_M
+    mass_row_base = q_row_offset
+
+    range_Q_seq = abs_pid_seq * BLOCK_M + tl.arange(0, BLOCK_M)
+
+    dtype = Q.type.element_ty
+
+    Q_ptrs = tl.make_block_ptr(
+        base=Q + pid_bz * stride_bz_q + pid_h * stride_h_q,
+        shape=(qo_len, HEAD_DIM),
+        strides=(stride_seq_q, stride_d_q),
+        offsets=(abs_pid_seq * BLOCK_M, 0),
+        block_shape=(BLOCK_M, HEAD_DIM),
+        order=(1, 0),
+    )
+    K_ptrs = tl.make_block_ptr(
+        base=K + pid_bz * stride_bz_k + (pid_h // num_kv_groups) * stride_h_k,
+        shape=(kv_len, HEAD_DIM),
+        strides=(stride_seq_k, stride_d_k),
+        offsets=(0, 0),
+        block_shape=(BLOCK_N, HEAD_DIM),
+        order=(1, 0),
+    )
+    V_ptrs = tl.make_block_ptr(
+        base=V + pid_bz * stride_bz_v + (pid_h // num_kv_groups) * stride_h_v,
+        shape=(kv_len, HEAD_DIM),
+        strides=(stride_seq_v, stride_d_v),
+        offsets=(0, 0),
+        block_shape=(BLOCK_N, HEAD_DIM),
+        order=(1, 0),
+    )
+    O_ptrs = tl.make_block_ptr(
+        base=O + pid_bz * stride_bz_o + pid_h * stride_h_o,
+        shape=(qo_len, HEAD_DIM),
+        strides=(stride_seq_o, stride_d_o),
+        offsets=(abs_pid_seq * BLOCK_M, 0),
+        block_shape=(BLOCK_M, HEAD_DIM),
+        order=(1, 0),
+    )
+    q_start_index = abs_pid_seq * BLOCK_M
+    logical_q_block_idx = q_start_index // LOGICAL_BLOCK_SIZE
+    K_block_indices_ptrs = (K_block_indices + pid_bz * stride_bz_k_block_indices
+                            + pid_h * stride_h_k_block_indices
+                            + logical_q_block_idx * stride_seqq_k_block_indices)
+
+    # int64 addressing: at long seq, stride_mass_h (= s * num_k_blocks) times the
+    # head index can exceed 2**31, so force the offset into int64.
+    Mass_base = (Mass + pid_bz * stride_mass_bz.to(tl.int64)
+                 + pid_h * stride_mass_h.to(tl.int64))
+
+    m_i = tl.zeros((BLOCK_M,), dtype=tl.float32) - float("inf")
+    l_i = tl.zeros((BLOCK_M,), dtype=tl.float32) + 1.0
+    acc = tl.zeros([BLOCK_M, HEAD_DIM], dtype=tl.float32)
+
+    softmax_scale *= 1.44269504  # 1/log(2)
+    q = tl.load(Q_ptrs, boundary_check=(0, 1), padding_option="zero")
+
+    # Off-diagonal segments
+    acc, l_i, m_i = _block_sparse_score_fwd_inner(
+        acc, l_i, m_i,
+        q, qo_len, kv_len, K_ptrs, V_ptrs,
+        K_block_indices_ptrs,
+        Mass_base,
+        stride_mass_row, stride_mass_blk,
+        mass_row_base,
+        abs_pid_seq, range_Q_seq, softmax_scale,
+        dtype, BLOCK_M, HEAD_DIM, BLOCK_N, SEGMENT_SIZE, LOGICAL_BLOCK_SIZE,
+        4 - STAGE,
+        EMIT_SCORE,
+    )
+
+    if STAGE != 1:  # causal
+        # On-diagonal segments
+        acc, l_i, m_i = _block_sparse_score_fwd_inner(
+            acc, l_i, m_i,
+            q, qo_len, kv_len, K_ptrs, V_ptrs,
+            K_block_indices_ptrs,
+            Mass_base,
+            stride_mass_row, stride_mass_blk,
+            mass_row_base,
+            abs_pid_seq, range_Q_seq, softmax_scale,
+            dtype, BLOCK_M, HEAD_DIM, BLOCK_N, SEGMENT_SIZE, LOGICAL_BLOCK_SIZE,
+            2,
+            EMIT_SCORE,
+        )
+
+    acc = acc / l_i[:, None]
+    tl.store(O_ptrs, acc.to(dtype), boundary_check=(0, 1))
+
+    if EMIT_SCORE:
+        # row softmax normalizer in base-2: LSE2[row] = m_i + log2(l_i).
+        # LSE2 shares the mass scratch's chunk-local row layout.
+        lse2 = m_i + tl.math.log2(l_i)
+        row_valid = range_Q_seq < qo_len
+        local_row = range_Q_seq - mass_row_base
+        tl.store(
+            LSE2 + pid_bz * stride_lse2_bz + pid_h * stride_lse2_h + local_row * stride_lse2_row,
+            lse2, mask=row_valid,
+        )
+
+
+@triton.jit
+def _block_score_reduce_kernel(
+    Mass, LSE2, Score,
+    stride_mz, stride_mh, stride_mm, stride_mb,
+    stride_lz, stride_lh, stride_lm,
+    stride_sz, stride_sh, stride_sm, stride_sn,
+    q_len, num_k_blocks,
+    q_row_offset,                 # absolute row offset of this (chunk-local) buffer
+    BLOCK_M: tl.constexpr,        # query (logical) block size
+    BLOCK_KB: tl.constexpr,       # k-block tile width for the reduction
+    IS_CAUSAL: tl.constexpr,
+    BLOCK_N: tl.constexpr,        # scoring block size (== logical block size)
+):
+    pid_m = tl.program_id(0)
+    pid_h = tl.program_id(1).to(tl.int64)
+    pid_z = tl.program_id(2).to(tl.int64)
+
+    # mass/lse2 are chunk-local (rows 0..chunk_rows); validity uses the absolute row.
+    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    row_valid = (offs_m + q_row_offset) < q_len
+
+    lse2 = tl.load(
+        LSE2 + pid_z * stride_lz + pid_h * stride_lh + offs_m * stride_lm,
+        mask=row_valid, other=0.0,
+    )
+
+    if IS_CAUSAL:
+        hi = (pid_m * BLOCK_M + BLOCK_M - 1 + q_row_offset) // BLOCK_N + 1
+        hi = tl.minimum(hi, num_k_blocks)
+    else:
+        hi = num_k_blocks
+
+    # int64 addressing: stride_mh (= q_len * num_k_blocks) * head index can exceed 2**31
+    mass_base = Mass + pid_z * stride_mz.to(tl.int64) + pid_h * stride_mh.to(tl.int64)
+    score_base = Score + pid_z * stride_sz + pid_h * stride_sh + pid_m * stride_sm
+
+    for c in range(0, hi, BLOCK_KB):
+        offs_kb = c + tl.arange(0, BLOCK_KB)
+        col_valid = offs_kb < hi
+        mask = row_valid[:, None] & col_valid[None, :]
+        mass = tl.load(
+            mass_base + offs_m[:, None] * stride_mm + offs_kb[None, :] * stride_mb,
+            mask=mask, other=-float("inf"),
+        )
+        p = tl.where(mask, tl.math.exp2(mass - lse2[:, None]), 0.0)
+        score = tl.sum(p, 0)  # sum over query rows -> (BLOCK_KB,)
+        tl.store(score_base + offs_kb * stride_sn, score, mask=col_valid)
+
+
+def block_sparse_attn_with_score(
+    q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,   # (batch, H, seq, dim)
+    block_mask: torch.Tensor,                            # (batch, H, num_q_blocks, num_k_blocks) all-select
+    block_size: int = 128,
+    segment_size: int = 2048,
+    causal: bool = True,
+    softmax_scale: float = None,
+    q_chunk_blocks: int = None,
+):
+    """Dense (full-head) block-sparse forward that also returns exact per-block scores.
+
+    Returns (out, block_score), block_score shape (batch, H, num_q_blocks, num_k_blocks) fp32,
+    where block_score[b,h,i,j] = total softmax mass from query block i onto key block j.
+
+    ``q_chunk_blocks``: if set, process the query dimension in chunks of this many
+    q-blocks, reusing one chunk-sized (b, H, chunk*block_size, num_k_blocks) mass
+    scratch across chunks. This bounds the O(s*num_k_blocks) scratch (which is
+    quadratic in s) to O(chunk*num_k_blocks) at the cost of a few extra (async)
+    kernel launches. ``None`` -> single full-size launch (original behaviour).
+    """
+    b, H, s, d = q.shape
+    Hkv = k.shape[1]
+    num_kv_groups = H // Hkv
+    if softmax_scale is None:
+        softmax_scale = 1.0 / math.sqrt(d)
+    num_q_blocks = (s + block_size - 1) // block_size
+    num_k_blocks = num_q_blocks
+
+    out = torch.empty_like(q)
+    block_score = torch.empty((b, H, num_q_blocks, num_k_blocks), dtype=torch.float32, device=q.device)
+
+    if q_chunk_blocks is None or q_chunk_blocks >= num_q_blocks:
+        chunk_qb = num_q_blocks
+    else:
+        chunk_qb = q_chunk_blocks
+    chunk_rows = chunk_qb * block_size
+
+    # scratch reused across chunks: per query row, per key block log-sum-exp
+    # (block_size x smaller than scores). Dense/full-select + causal: every k-block
+    # in the reduce's causal range is written by the main kernel, so no -inf
+    # pre-fill is needed.
+    mass = torch.empty((b, H, chunk_rows, num_k_blocks), dtype=torch.float32, device=q.device)
+    lse2 = torch.empty((b, H, chunk_rows), dtype=torch.float32, device=q.device)
+
+    for qb0 in range(0, num_q_blocks, chunk_qb):
+        qb1 = min(qb0 + chunk_qb, num_q_blocks)
+        nqb_c = qb1 - qb0
+        q_row_offset = qb0 * block_size
+
+        def grid(META, _nqb_c=nqb_c, _bs=block_size):
+            return (triton.cdiv(_nqb_c * _bs, META["BLOCK_M"]), H, b)
+
+        _block_sparse_score_fwd[grid](
+            q, k, v, out, block_mask,
+            mass, lse2,
+            q.stride(0), q.stride(1), q.stride(2), q.stride(3),
+            k.stride(0), k.stride(1), k.stride(2), k.stride(3),
+            v.stride(0), v.stride(1), v.stride(2), v.stride(3),
+            out.stride(0), out.stride(1), out.stride(2), out.stride(3),
+            block_mask.stride(0), block_mask.stride(1), block_mask.stride(2), block_mask.stride(3),
+            mass.stride(0), mass.stride(1), mass.stride(2), mass.stride(3),
+            lse2.stride(0), lse2.stride(1), lse2.stride(2),
+            s, s, softmax_scale,
+            q_row_offset,
+            H, d, block_size, segment_size, num_kv_groups,
+            H=H, num_kv_groups=num_kv_groups, HEAD_DIM=d,
+            SEGMENT_SIZE=segment_size, LOGICAL_BLOCK_SIZE=block_size,
+            STAGE=3 if causal else 1,
+            EMIT_SCORE=True,
+        )
+
+        bs_view = block_score[:, :, qb0:qb1, :]
+        grid2 = (nqb_c, H, b)
+        _block_score_reduce_kernel[grid2](
+            mass, lse2, bs_view,
+            mass.stride(0), mass.stride(1), mass.stride(2), mass.stride(3),
+            lse2.stride(0), lse2.stride(1), lse2.stride(2),
+            bs_view.stride(0), bs_view.stride(1), bs_view.stride(2), bs_view.stride(3),
+            s, num_k_blocks,
+            q_row_offset,           # causal upper bound + row validity use absolute row
+            BLOCK_M=block_size,
+            BLOCK_KB=min(128, triton.next_power_of_2(num_k_blocks)),
+            IS_CAUSAL=causal,
+            BLOCK_N=block_size,
+        )
+    return out, block_score
+
+
+def select_topk_blocks(
+    block_score: torch.Tensor,   # (batch, n_full, num_q_blocks, num_k_blocks) fp32
+    budget: int = 32,
+    causal: bool = True,
+    force_first: bool = True,
+    agg: str = "mean",
+    topk_ratio: float = None,    # if set, budget = ceil(causal_valid_k * topk_ratio) per q-block
+    sink_blocks: int = 1,
+    local_blocks: int = 1,
+) -> torch.Tensor:
+    """Aggregate full-head block scores and pick top-``budget`` k-blocks per q-block.
+
+    Returns a bool block mask of shape (batch, num_q_blocks, num_k_blocks) shared
+    across all sparse heads.
+
+    If ``topk_ratio`` is set, the budget per q-block is computed as:
+      ceil(num_causal_valid_k_blocks * topk_ratio) + sink_blocks + local_blocks
+    where num_causal_valid_k_blocks is the number of causal k-blocks for that q-block
+    (excluding sink and local which are forced).
+    """
+    import math as _math
+    b, nf, nqb, nkb = block_score.shape
+    if agg == "mean":
+        imp = block_score.mean(dim=1)
+    elif agg == "max":
+        imp = block_score.amax(dim=1)
+    elif agg == "sum":
+        imp = block_score.sum(dim=1)
+    else:
+        raise ValueError(f"unknown agg={agg}")
+
+    dev = block_score.device
+    off = nkb - nqb
+    qb_idx = torch.arange(nqb, device=dev)
+    kb_idx = torch.arange(nkb, device=dev)
+    causal_layout = (kb_idx[None, :] <= qb_idx[:, None] + off) if causal else torch.ones(nqb, nkb, dtype=torch.bool, device=dev)
+
+    imp = imp.masked_fill(~causal_layout[None], -1.0)   # invalid k-blocks -> -1
+
+    if topk_ratio is not None:
+        # Per-q-block dynamic budget: ceil(causal_valid_k * topk_ratio) content blocks.
+        causal_valid_k = (qb_idx + off).clamp_(max=nkb - 1) + 1  # (nqb,)
+        per_qb_budget = torch.ceil(causal_valid_k.float() * topk_ratio).long()  # (nqb,)
+        per_qb_budget = per_qb_budget.clamp_(min=1, max=nkb)
+
+        k = int(per_qb_budget.max().item())
+        topv, topi = imp.topk(k, dim=-1)                    # (b, nqb, k)
+
+        # Mask out positions beyond each row's own content budget.
+        rank = torch.arange(k, device=dev)[None, :]          # (1, k)
+        valid_rank = rank < per_qb_budget[:, None]           # (nqb, k)
+
+        mask = torch.zeros((b, nqb, nkb), dtype=torch.bool, device=dev)
+        # scatter valid topk positions (invalid budget positions excluded via valid_rank)
+        valid_topi = topi.clamp_(max=nkb - 1)
+        mask.scatter_(-1, valid_topi, valid_rank[None].expand(b, -1, -1) & (topv >= 0.0))
+        # force sink and diagonal (no dedup needed: scatter is idempotent)
+        if force_first:
+            mask[:, :, 0] = True
+        diag_k = (qb_idx + off).clamp_(max=nkb - 1)
+        mask[:, qb_idx, diag_k] = True
+    else:
+        k = min(budget, nkb)
+        topv, topi = imp.topk(k, dim=-1)                    # (b, nqb, k)
+        mask = torch.zeros((b, nqb, nkb), dtype=torch.bool, device=dev)
+        mask.scatter_(-1, topi, topv >= 0.0)                # drop invalid picks (early rows)
+        if force_first:
+            mask[:, :, 0] = True                            # sink block
+        diag_k = (qb_idx + off).clamp_(max=nkb - 1)
+        mask[:, qb_idx, diag_k] = True                     # local/diagonal block
+
+    mask &= causal_layout[None]
+    return mask
+
+
+def _compact_block_mask(block_mask: torch.Tensor, max_sel: int):
+    """(b, nqb, nkb) bool selection -> (k_sel int32 (b,nqb,max_sel), k_cnt int32 (b,nqb)).
+
+    Per (b, q_block), the selected k-block indices in ascending order, padded to
+    ``max_sel`` with the sentinel ``nkb`` (never read: the kernel loops ``i < cnt``).
+    The selection is head-shared, so there is no head dimension."""
+    b, nqb, nkb = block_mask.shape
+    dev = block_mask.device
+    k_cnt = block_mask.sum(-1).clamp_(max=max_sel).to(torch.int32).contiguous()
+    idx = torch.arange(nkb, device=dev).view(1, 1, nkb)
+    masked = torch.where(block_mask, idx, torch.full_like(idx, nkb))
+    k_sel = masked.sort(dim=-1).values[..., :max_sel].to(torch.int32).contiguous()
+    return k_sel, k_cnt
+
+
+@triton.autotune(
+    configs=(
+        _BLOCK_SPARSE_FULL_AUTOTUNE_CONFIGS
+        if _BLOCK_SPARSE_FULL_AUTOTUNE and not _BLOCK_SPARSE_NO_AUTOTUNE
+        else _BLOCK_SPARSE_FIXED_CONFIG
+    ),
+    key=['autotune_h', 'autotune_head_dim', 'autotune_logical_block_size', 'autotune_num_kv_groups'],
+    prune_configs_by={'early_config_prune': _prune_invalid_configs},
+)
+@triton.jit
+def _block_sparse_indexed_fwd(
+    Q, K, V, O,
+    K_sel, K_cnt,
+    stride_bz_q, stride_h_q, stride_seq_q, stride_d_q,
+    stride_bz_k, stride_h_k, stride_seq_k, stride_d_k,
+    stride_bz_v, stride_h_v, stride_seq_v, stride_d_v,
+    stride_bz_o, stride_h_o, stride_seq_o, stride_d_o,
+    stride_ksel_z, stride_ksel_q, stride_ksel_s,
+    stride_kcnt_z, stride_kcnt_q,
+    qo_len, kv_len, softmax_scale,
+    autotune_h, autotune_head_dim, autotune_logical_block_size, autotune_num_kv_groups,
+    H: tl.constexpr, num_kv_groups: tl.constexpr, HEAD_DIM: tl.constexpr,
+    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
+    LOGICAL_BLOCK_SIZE: tl.constexpr, MAX_SEL: tl.constexpr, IS_CAUSAL: tl.constexpr,
+):
+    # __INDEXED_BODY_PLACEHOLDER__
+    tl.static_assert((LOGICAL_BLOCK_SIZE % BLOCK_M) == 0)
+    tl.static_assert((LOGICAL_BLOCK_SIZE % BLOCK_N) == 0)
+    NSUB: tl.constexpr = LOGICAL_BLOCK_SIZE // BLOCK_N
+    pid_seq = tl.program_id(0)
+    pid_h = tl.program_id(1).to(tl.int64)
+    pid_bz = tl.program_id(2).to(tl.int64)
+    dtype = Q.type.element_ty
+
+    logical_q_block = (pid_seq * BLOCK_M) // LOGICAL_BLOCK_SIZE
+    offs_m = pid_seq * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_d = tl.arange(0, HEAD_DIM)
+    q_mask = offs_m < qo_len
+
+    q_base = Q + pid_bz * stride_bz_q + pid_h * stride_h_q
+    q = tl.load(q_base + offs_m[:, None] * stride_seq_q + offs_d[None, :] * stride_d_q,
+                mask=q_mask[:, None], other=0.0).to(dtype)
+    k_base = K + pid_bz * stride_bz_k + (pid_h // num_kv_groups) * stride_h_k
+    v_base = V + pid_bz * stride_bz_v + (pid_h // num_kv_groups) * stride_h_v
+
+    m_i = tl.zeros((BLOCK_M,), dtype=tl.float32) - float("inf")
+    l_i = tl.zeros((BLOCK_M,), dtype=tl.float32) + 1.0
+    acc = tl.zeros((BLOCK_M, HEAD_DIM), dtype=tl.float32)
+    scale = softmax_scale * 1.44269504  # 1/log(2)
+
+    cnt = tl.load(K_cnt + pid_bz * stride_kcnt_z + logical_q_block * stride_kcnt_q)
+    sel_base = K_sel + pid_bz * stride_ksel_z + logical_q_block * stride_ksel_q
+
+    for i in range(0, MAX_SEL):
+        if i < cnt:
+            kb = tl.load(sel_base + i * stride_ksel_s)
+            for sub in tl.static_range(NSUB):
+                kv_seq_start = kb * LOGICAL_BLOCK_SIZE + sub * BLOCK_N
+                offs_n = kv_seq_start + tl.arange(0, BLOCK_N)
+                n_mask = offs_n < kv_len
+                k = tl.load(k_base + offs_n[:, None] * stride_seq_k + offs_d[None, :] * stride_d_k,
+                            mask=n_mask[:, None], other=0.0).to(dtype)
+                qk = tl.dot(q, tl.trans(k)) * scale
+                bad = offs_n[None, :] >= kv_len
+                if IS_CAUSAL:
+                    bad |= offs_m[:, None] < offs_n[None, :]
+                qk = qk + tl.where(bad, -1e6, 0.0)
+                local_m = tl.max(qk, 1)
+                m_ij = tl.maximum(m_i, local_m)
+                qk -= m_ij[:, None]
+                p = tl.math.exp2(qk)
+                l_ij = tl.sum(p, 1)
+                alpha = tl.math.exp2(m_i - m_ij)
+                acc = acc * alpha[:, None]
+                v = tl.load(v_base + offs_n[:, None] * stride_seq_v + offs_d[None, :] * stride_d_v,
+                            mask=n_mask[:, None], other=0.0).to(dtype)
+                acc += tl.dot(p.to(dtype), v)
+                l_i = l_i * alpha + l_ij
+                m_i = m_ij
+
+    acc = acc / l_i[:, None]
+    o_base = O + pid_bz * stride_bz_o + pid_h * stride_h_o
+    tl.store(o_base + offs_m[:, None] * stride_seq_o + offs_d[None, :] * stride_d_o,
+             acc.to(dtype), mask=q_mask[:, None])
+
+
+def _sparse_block_attn(
+    q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,   # (batch, H, seq, dim)
+    block_mask: torch.Tensor,        # (batch, num_q_blocks, num_k_blocks) bool, SHARED across heads
+    budget: int,
+    block_size: int = 128,
+    causal: bool = True,
+    softmax_scale: float = None,
+    k_sel: torch.Tensor = None,      # (b, nqb, max_sel) int32  — pre-compacted, skip _compact_block_mask
+    k_cnt: torch.Tensor = None,      # (b, nqb) int32
+    out: torch.Tensor = None,        # optional pre-allocated output buffer (may be non-contiguous)
+) -> torch.Tensor:
+    """Block-sparse attention that iterates ONLY the selected k-blocks per q-block
+    (O(budget), not O(num_k_blocks)). ``block_mask`` is the head-shared selection
+    ``(b, num_q_blocks, num_k_blocks)``; it is compacted to a per-q-block index list
+    and the kernel loops that list (shared across all sparse heads -> no per-head
+    mask materialization).
+
+    If ``k_sel`` / ``k_cnt`` are provided (pre-compacted from the anchor pass),
+    ``block_mask`` is ignored and ``_compact_block_mask`` is skipped entirely.
+
+    If ``out`` is provided, the kernel writes directly into it (avoiding an extra
+    copy when the caller wants results in a non-contiguous slice of a larger buffer).
+    ``out`` must have shape ``(b, H, s, d)`` but may be non-contiguous.
+    """
+    b, H, s, d = q.shape
+    Hkv = k.shape[1]
+    num_kv_groups = H // Hkv
+    if softmax_scale is None:
+        softmax_scale = 1.0 / math.sqrt(d)
+
+    if k_sel is not None and k_cnt is not None:
+        # Fast path: caller already has compacted indices from the anchor selection.
+        max_sel = k_sel.shape[-1]
+    else:
+        nkb = block_mask.shape[-1]
+        max_sel = min(budget + 2, nkb)
+        k_sel, k_cnt = _compact_block_mask(block_mask, max_sel)
+
+    if out is None:
+        out = torch.empty_like(q)
+
+    def grid(META):
+        return (triton.cdiv(s, META["BLOCK_M"]), H, b)
+
+    _block_sparse_indexed_fwd[grid](
+        q, k, v, out, k_sel, k_cnt,
+        q.stride(0), q.stride(1), q.stride(2), q.stride(3),
+        k.stride(0), k.stride(1), k.stride(2), k.stride(3),
+        v.stride(0), v.stride(1), v.stride(2), v.stride(3),
+        out.stride(0), out.stride(1), out.stride(2), out.stride(3),
+        k_sel.stride(0), k_sel.stride(1), k_sel.stride(2),
+        k_cnt.stride(0), k_cnt.stride(1),
+        s, s, softmax_scale,
+        H, d, block_size, num_kv_groups,
+        H=H, num_kv_groups=num_kv_groups, HEAD_DIM=d,
+        LOGICAL_BLOCK_SIZE=block_size, MAX_SEL=max_sel,
+        IS_CAUSAL=causal,
+    )
+    return out
+
+
+def reuse_v1_layer(
+    query_states: torch.Tensor,   # (batch, H, seq, dim)
+    key_states: torch.Tensor,     # (batch, Hkv, seq, dim), native GQA (NOT expanded)
+    value_states: torch.Tensor,   # (batch, Hkv, seq, dim)
+    full_head: torch.Tensor = None,   # (Hkv,) bool -- which KV heads are full/dense
+    prev_block_mask: torch.Tensor = None,   # (batch, num_q_blocks, num_k_blocks) carried selection
+    budget: int = 32,
+    block_size: int = 128,
+    segment_size: int = 2048,
+    agg: str = "mean",
+    causal: bool = True,
+    softmax_scale: float = None,
+    chunk_ctas: int = 2048,
+    n_full_kv: int = None,
+):
+    """One layer. Sparse heads ALWAYS consume ``prev_block_mask`` (the selection
+    from the nearest previous full-head layer). If this layer has full heads, they
+    run dense + emit block scores -> a NEW topk selection that is returned to be
+    used by *subsequent* layers (delayed by one layer). This keeps the full-head
+    and sparse-head paths within a layer independent (they can run concurrently).
+
+    Head layout: K/V stay native GQA ``(b, Hkv, s, d)``; each full/sparse kv-head
+    maps to its G = H // Hkv q-heads (repeat_interleave layout), so K/V are never
+    expanded to H.
+
+    Two ways to specify which heads are full:
+
+    * ``full_head`` -- ``(Hkv,)`` bool mask. Full/sparse kv-heads (and their q-head
+      groups) are gathered with advanced indexing, which *copies* q/k/v for the
+      selected heads every call.
+    * ``n_full_kv`` -- int, for the case where the model's heads are ALREADY
+      reordered full-first (kv-heads ``[0, n_full_kv)`` full, ``[n_full_kv, Hkv)``
+      sparse). Then the full/sparse partitions are contiguous slice **views** (zero
+      copy, no ``.contiguous()``): the gather cost is paid once at load time by
+      permuting the projection weights, not every forward. Takes precedence over
+      ``full_head`` when given.
+
+    Returns (attn_output, next_block_mask)."""
+    b, H, s, d = query_states.shape
+    Hkv = key_states.shape[1]
+    G = H // Hkv
+    nqb = (s + block_size - 1) // block_size
+    dev = query_states.device
+
+    reordered = n_full_kv is not None
+    if reordered:
+        nf_kv = int(n_full_kv)
+        n_sp_kv = Hkv - nf_kv
+    else:
+        if full_head is None:
+            raise ValueError("provide either full_head (Hkv,) bool or n_full_kv int")
+        full_head = full_head.to(dev).bool()
+        full_kv = full_head.nonzero().flatten()     # kv-head indices
+        sp_kv = (~full_head).nonzero().flatten()
+        nf_kv = full_kv.numel()
+        n_sp_kv = sp_kv.numel()
+        arangeG = torch.arange(G, device=dev)
+        def kv_to_q(kv_idx):     # kv-head index -> its G contiguous q-head indices
+            return (kv_idx[:, None] * G + arangeG[None, :]).reshape(-1)
+
+    nfq = nf_kv * G
+    out = torch.empty_like(query_states)
+
+    # 1. full heads: dense attention (needed anyway) + exact block scores -> NEW
+    #    selection for the *next* layers. Does NOT affect this layer's sparse heads.
+    if nf_kv > 0:
+        num_k_blocks = nqb
+        # Auto q-chunking to bound the O(s^2) block-score mass scratch. The full
+        # kernel's launch grid ~ (chunk_qb q-blocks) x (nfq heads) x (b), so keep
+        # chunk_qb * nfq * b ~ 2048 CTAs: well above the ~128-256 occupancy floor
+        # (latency stays flat) while capping mass at ~2048 * s * 4 bytes (linear
+        # in s). Short sequences clamp to num_q_blocks (= no chunking).
+        chunk_qb = min(nqb, max(1, math.ceil(chunk_ctas / (nfq * b))))
+        # all-select causal block mask (dense), one per full q-head
+        full_bm = torch.ones((b, nfq, nqb, num_k_blocks), dtype=torch.bool, device=dev)
+        if reordered:
+            q_full = query_states[:, :nfq]        # zero-copy slice views
+            k_full = key_states[:, :nf_kv]
+            v_full = value_states[:, :nf_kv]
+        else:
+            fq = kv_to_q(full_kv)                  # (nfq,) q-head indices
+            q_full = query_states[:, fq].contiguous()
+            k_full = key_states[:, full_kv].contiguous()
+            v_full = value_states[:, full_kv].contiguous()
+        out_full, block_score = block_sparse_attn_with_score(
+            q_full, k_full, v_full, full_bm,       # native GQA -> num_kv_groups = G
+            block_size=block_size, segment_size=segment_size,
+            causal=causal, softmax_scale=softmax_scale,
+            q_chunk_blocks=chunk_qb,
+        )
+        if reordered:
+            out[:, :nfq] = out_full
+        else:
+            out[:, fq] = out_full
+        next_sel = select_topk_blocks(block_score, budget, causal, agg=agg)   # (b, nqb, nkb)
+    else:
+        next_sel = prev_block_mask   # no full head -> carry selection unchanged
+
+    # 2. sparse heads: reuse the PREVIOUS layer's selection (delayed update). The
+    #    selection is head-shared (b, nqb, nkb); the indexed kernel loops only the
+    #    selected blocks, so no per-head mask materialization is needed.
+    if n_sp_kv > 0:
+        if prev_block_mask is None:
+            raise ValueError("no prior full-head selection available; the first layer "
+                             "with sparse heads must follow a full-head layer")
+        if reordered:
+            out[:, nfq:] = _sparse_block_attn(
+                query_states[:, nfq:], key_states[:, nf_kv:], value_states[:, nf_kv:],
+                prev_block_mask, budget, block_size, causal, softmax_scale,
+            )
+        else:
+            sq = kv_to_q(sp_kv)                    # (nsq,) q-head indices
+            out[:, sq] = _sparse_block_attn(
+                query_states[:, sq].contiguous(),
+                key_states[:, sp_kv].contiguous(),
+                value_states[:, sp_kv].contiguous(),
+                prev_block_mask, budget, block_size, causal, softmax_scale,
+            )
+
+    return out, next_sel
+
+
+def reuse_v1_forward(qkv_layers, full_head_matrix, budget=32, block_size=128,
+                     segment_size=2048, agg="mean", causal=True):
+    """Driver over layers. ``qkv_layers`` is a list of (q, k, v) per layer;
+    ``full_head_matrix`` is (num_layers, H) bool. Carries the selection forward."""
+    outs = []
+    carried = None
+    for (q, k, v), fh in zip(qkv_layers, full_head_matrix):
+        o, carried = reuse_v1_layer(q, k, v, fh, carried, budget, block_size,
+                                    segment_size, agg, causal)
+        outs.append(o)
+    return outs
+
+
+# --------------------------------------------------------------------------- #
+# Per-kv-head IndexCache + per-layer driver used by reuse_v1/reuse_prefill.py
+# --------------------------------------------------------------------------- #
+
+def _resolve_max_sel(select_mode: str, budget: int, max_blocks, nqb: int,
+                     sink_blocks: int = 1, local_blocks: int = 2,
+                     topk_ratio: float = None) -> int:
+    """Return the kernel constexpr MAX_SEL for the given selection mode.
+
+    * ``topk`` (fixed budget): ``budget + sink_blocks + local_blocks``.
+    * ``topk`` (ratio budget): ``ceil(nqb * topk_ratio) + sink_blocks + local_blocks``.
+    * ``topp``: ``max_blocks + 2`` (nucleus upper-bound + sink + local).
+      ``max_blocks=None`` uses ``nqb`` (no cap).
+    """
+    if select_mode == 'topk':
+        if topk_ratio is not None:
+            import math as _math
+            ratio_budget = _math.ceil(nqb * topk_ratio)
+            return min(ratio_budget + 2, nqb)   # +2 for forced sink + diagonal
+        return min(budget + sink_blocks + local_blocks, nqb)
+    else:  # topp
+        cap = nqb if max_blocks is None else int(max_blocks)
+        return min(cap + 2, nqb)
+
+
+class IndexCache:
+    """Cross-layer persistent block-index table.
+
+    Shape: ``(batch, nqb, Hkv, max_sel)`` int32.  Each ``(b, qb, hkv)`` slot
+    stores the most-recently-computed anchor selection for that kv-head, padded
+    with ``nqb`` (sentinel).  Sparse heads read their own slot; anchor heads
+    overwrite it after computing a fresh selection.
+    """
+
+    def __init__(self, batch: int, nqb: int, Hkv: int, max_sel: int, device):
+        self.batch = batch
+        self.nqb = nqb
+        self.Hkv = Hkv
+        self.max_sel = max_sel
+        # Initialise with sentinel (nqb) so unwritten slots are safe to read.
+        self.buf = torch.full((batch, nqb, Hkv, max_sel), nqb,
+                              dtype=torch.int32, device=device)
+        # Per-kv-head count of valid entries (batch, nqb, Hkv).
+        self.cnt = torch.zeros((batch, nqb, Hkv), dtype=torch.int32, device=device)
+
+    def write(self, hkv_idx: int, k_sel: torch.Tensor, k_cnt: torch.Tensor):
+        """Store a fresh anchor selection for kv-head ``hkv_idx``.
+
+        ``k_sel``: (batch, nqb, max_sel) int32
+        ``k_cnt``: (batch, nqb) int32
+        """
+        self.buf[:, :, hkv_idx, :] = k_sel
+        self.cnt[:, :, hkv_idx] = k_cnt
+
+    def read(self, hkv_idx: int):
+        """Return (k_sel, k_cnt) for kv-head ``hkv_idx``."""
+        return self.buf[:, :, hkv_idx, :], self.cnt[:, :, hkv_idx]
+
+
+def _select_blocks_topp(
+    block_score: torch.Tensor,   # (batch, nqb, nkb) fp32, ALREADY aggregated
+    top_p: float,
+    min_blocks: int,
+    max_blocks: int,
+    max_sel: int,
+    causal: bool,
+    nkb: int,
+    nqb: int,
+    dev,
+) -> tuple:
+    """Nucleus (top-p) block selection.  Returns (k_sel, k_cnt) int32.
+
+    Uses topk(max_blocks) instead of full sort to avoid O(nkb log nkb) cost.
+    The final index list is produced by a single sort of at most max_blocks
+    elements (vs the original two O(nkb) sorts).
+    """
+    b = block_score.shape[0]
+    off = nkb - nqb
+    qb_idx = torch.arange(nqb, device=dev)
+
+    # --- causal mask: only consider k-blocks at or before the q-block ---
+    causal_valid_k = (qb_idx + off).clamp_(max=nkb - 1) + 1  # (nqb,) upper bound (exclusive)
+
+    # Mask out acausal positions before topk to avoid picking them.
+    if causal:
+        col = torch.arange(nkb, device=dev)[None, :]         # (1, nkb)
+        causal_mask2d = col < causal_valid_k[:, None]         # (nqb, nkb)
+        imp = block_score.masked_fill(~causal_mask2d[None], -1.0)
+    else:
+        imp = block_score
+
+    # Candidate set: topk(max_blocks) by importance — O(nkb) instead of O(nkb log nkb).
+    k_cand = min(max_blocks, nkb)
+    topk_vals, topk_idx = imp.topk(k_cand, dim=-1, sorted=True)  # (b, nqb, k_cand), sorted desc
+
+    # Top-p threshold on the candidate set.
+    cumsum = topk_vals.clamp(min=0.0).cumsum(dim=-1)
+    total  = cumsum[..., -1:].clamp(min=1e-9)
+    keep   = (cumsum / total) <= top_p                            # (b, nqb, k_cand)
+    # Always keep at least min_blocks valid candidates.
+    keep[..., :min_blocks] = (topk_vals[..., :min_blocks] >= 0.0)
+
+    # Force sink (block 0) and diagonal into the selection.
+    # We append them as extra entries and de-dup via sort+unique later.
+    diag_k = (qb_idx + off).clamp_(max=nkb - 1)                  # (nqb,)
+    sink_row  = torch.zeros(b, nqb, 1, dtype=torch.int64, device=dev)
+    diag_row  = diag_k.view(1, nqb, 1).expand(b, -1, -1)
+    forced_idx = torch.cat([sink_row, diag_row], dim=-1)          # (b, nqb, 2)
+
+    # Keep only selected candidates and append forced indices.
+    # Zero-out unselected entries by replacing with nkb (sentinel > any valid idx).
+    sel_idx = torch.where(keep, topk_idx, torch.full_like(topk_idx, nkb))  # (b, nqb, k_cand)
+    # Concatenate forced; sentinel nkb will sort to end and be trimmed.
+    all_idx  = torch.cat([sel_idx, forced_idx], dim=-1)           # (b, nqb, k_cand+2)
+
+    # Sort to get indices in ascending order (required by kernel) and deduplicate
+    # by keeping only unique values (duplicates appear consecutively after sort).
+    sorted_idx, _ = all_idx.sort(dim=-1)                          # ascending; sentinels at end
+    # Detect duplicates: keep position if different from previous (or first).
+    shifted = torch.cat([
+        torch.full((b, nqb, 1), -1, dtype=sorted_idx.dtype, device=dev),
+        sorted_idx[..., :-1],
+    ], dim=-1)
+    unique_mask = (sorted_idx != shifted) & (sorted_idx < nkb)    # valid & not duplicate
+
+    # k_cnt = number of unique valid blocks per (b, q_block), capped at max_sel.
+    k_cnt = unique_mask.sum(-1).clamp_(max=max_sel).to(torch.int32).contiguous()
+
+    # Pack into (b, nqb, max_sel) int32, padding with sentinel nkb.
+    # Replace non-unique/invalid positions with nkb, then slice [:max_sel].
+    packed = torch.where(unique_mask, sorted_idx, torch.full_like(sorted_idx, nkb))
+    k_sel  = packed[..., :max_sel].to(torch.int32).contiguous()
+    return k_sel, k_cnt
+
+
+def reuse_v1_layer_per_hkv(
+    query_states: torch.Tensor,   # (batch, H, seq, d)
+    key_states: torch.Tensor,     # (batch, Hkv, seq, d)  native GQA
+    value_states: torch.Tensor,   # (batch, Hkv, seq, d)
+    label_L: torch.Tensor,        # (Hkv,) bool — True = anchor for this layer
+    cache: "IndexCache",
+    budget: int = 32,
+    block_size: int = 128,
+    segment_size: int = 2048,
+    causal: bool = True,
+    softmax_scale: float = None,
+    sink_blocks: int = 1,
+    local_blocks: int = 2,
+    select_mode: str = 'topk',
+    top_p: float = 0.9,
+    min_blocks: int = 8,
+    max_blocks: int = 64,
+    topk_ratio: float = None,    # if set (topk mode only): budget = ceil(kv_len//block_size * topk_ratio) + sink_blocks + local_blocks
+    streaming_fallback: bool = False,   # kept for API compat, ignored
+    last_q_full: bool = False,
+) -> torch.Tensor:
+    """Per-layer prefill forward with per-kv-head anchor/sparse dispatch.
+
+    Anchor kv-heads run full block-sparse attention (dense) and emit block scores
+    that are written into ``cache``.  Sparse kv-heads read their own cache slot
+    (the most recently written anchor selection for that kv-head) and run the
+    indexed sparse kernel over only those blocks.
+
+    ``last_q_full=True``: the last query block of sparse heads attends densely to
+    the full KV sequence (improves retrieval recall on NIAH / passkey tasks).
+    """
+    import math as _math
+
+    b, H, s, d = query_states.shape
+    Hkv = key_states.shape[1]
+    G = H // Hkv
+    nqb = (s + block_size - 1) // block_size
+    nkb = nqb   # square (seq == kv_len for prefill)
+    dev = query_states.device
+    if softmax_scale is None:
+        softmax_scale = 1.0 / _math.sqrt(d)
+
+    label_L = label_L.to(dev).bool()
+    anchor_kv = label_L.nonzero().flatten()    # kv-head indices that are anchor
+    sparse_kv = (~label_L).nonzero().flatten() # kv-head indices that are sparse
+
+    out = torch.empty_like(query_states)
+
+    # Pre-group Q and out into (b, Hkv, G, s, d) views — zero-copy, avoids
+    # fancy indexing inside the per-head loops (saves ~18ms at 128K).
+    q_grouped   = query_states.view(b, Hkv, G, s, d)
+    out_grouped = out.view(b, Hkv, G, s, d)
+
+    # Reuse the full-true block mask across anchor heads (same shape every call).
+    full_bm = torch.ones((b, G, nqb, nkb), dtype=torch.bool, device=dev)
+
+    # ------------------------------------------------------------------ #
+    # 1. Anchor heads: dense attention + compute fresh block selection
+    # ------------------------------------------------------------------ #
+    for hkv in anchor_kv.tolist():
+        q_h = q_grouped[:, hkv].contiguous()               # (b, G, s, d)
+        k_h = key_states[:, hkv:hkv+1].contiguous()        # (b, 1, s, d)
+        v_h = value_states[:, hkv:hkv+1].contiguous()
+
+        # q_chunk_blocks=None: process the full query sequence in one pass.
+        # The old formula `2048 // (G*b)` gave 512 for G=4 which is suboptimal;
+        # a single full-length launch is faster on B300.
+        out_h, block_score_h = block_sparse_attn_with_score(
+            q_h, k_h, v_h, full_bm,
+            block_size=block_size, segment_size=segment_size,
+            causal=causal, softmax_scale=softmax_scale,
+            q_chunk_blocks=None,
+        )
+        out_grouped[:, hkv] = out_h
+
+        # Aggregate across G q-heads -> (b, nqb, nkb)
+        imp = block_score_h.amax(dim=1)   # (b, nqb, nkb)
+
+        if select_mode == 'topk':
+            mask = select_topk_blocks(
+                block_score_h, budget=budget, causal=causal,
+                force_first=(sink_blocks > 0), agg='max',
+                topk_ratio=topk_ratio,
+                sink_blocks=sink_blocks, local_blocks=local_blocks,
+            )
+            max_sel = _resolve_max_sel('topk', budget, max_blocks, nqb,
+                                       sink_blocks=sink_blocks, local_blocks=local_blocks,
+                                       topk_ratio=topk_ratio)
+            k_sel, k_cnt = _compact_block_mask(mask, max_sel)
+        else:  # topp
+            max_sel = _resolve_max_sel('topp', budget, max_blocks, nqb,
+                                       sink_blocks=sink_blocks, local_blocks=local_blocks)
+            k_sel, k_cnt = _select_blocks_topp(
+                imp, top_p=top_p, min_blocks=min_blocks, max_blocks=max_blocks,
+                max_sel=max_sel, causal=causal, nkb=nkb, nqb=nqb, dev=dev,
+            )
+
+        cache.write(hkv, k_sel, k_cnt)
+
+    # ------------------------------------------------------------------ #
+    # 2. Sparse heads: reuse cached selection
+    # ------------------------------------------------------------------ #
+    for hkv in sparse_kv.tolist():
+        q_h = q_grouped[:, hkv].contiguous()               # (b, G, s, d)
+        k_h = key_states[:, hkv:hkv+1].contiguous()
+        v_h = value_states[:, hkv:hkv+1].contiguous()
+
+        k_sel, k_cnt = cache.read(hkv)   # (b, nqb, max_sel), (b, nqb)
+        max_sel = cache.max_sel
+
+        # Optionally run the last q-block densely for better retrieval recall
+        if last_q_full and nqb > 0:
+            last_qb = nqb - 1
+            last_q_start = last_qb * block_size
+            # Sparse attention for all but last q-block — write directly into
+            # out_grouped[:, hkv, :, :last_q_start] to avoid an extra non-contiguous copy.
+            if last_qb > 0:
+                _sparse_block_attn(
+                    q_h[:, :, :last_q_start], k_h, v_h,
+                    None, budget, block_size, causal, softmax_scale,
+                    k_sel=k_sel[:, :last_qb].contiguous(),
+                    k_cnt=k_cnt[:, :last_qb].contiguous(),
+                    out=out_grouped[:, hkv, :, :last_q_start],
+                )
+
+            # Dense attention for the last q-block — write directly into target slice
+            last_q = q_h[:, :, last_q_start:]   # (b, G, last_len, d)
+            last_len = last_q.shape[2]
+            causal_here = causal and (last_len > 1)
+            # flash_attn_func expects (batch, seqlen, nheads, headdim)
+            # Use batch=b, seqlen=*, nheads=G, so K/V need GQA-style (b, s, 1, d)
+            try:
+                from flash_attn import flash_attn_func
+                lq_fa = last_q.permute(0, 2, 1, 3).contiguous().to(torch.bfloat16)  # (b, last_len, G, d)
+                k_fa  = k_h.permute(0, 2, 1, 3).contiguous().to(torch.bfloat16)    # (b, s, 1, d)
+                v_fa  = v_h.permute(0, 2, 1, 3).contiguous().to(torch.bfloat16)    # (b, s, 1, d)
+                last_out = flash_attn_func(
+                    lq_fa, k_fa, v_fa,
+                    softmax_scale=softmax_scale,
+                    causal=causal_here,
+                ).permute(0, 2, 1, 3).to(query_states.dtype)  # (b, G, last_len, d)
+            except (ImportError, Exception):
+                from torch.nn.functional import scaled_dot_product_attention as _sdpa
+                last_q_t = last_q.reshape(b * G, last_len, d)
+                k_t = k_h.expand(b, G, s, d).reshape(b * G, s, d)
+                v_t = v_h.expand(b, G, s, d).reshape(b * G, s, d)
+                last_out = _sdpa(
+                    last_q_t, k_t, v_t,
+                    scale=softmax_scale, is_causal=causal_here,
+                ).reshape(b, G, last_len, d)
+            out_grouped[:, hkv, :, last_q_start:] = last_out
+        else:
+            # Pass k_sel/k_cnt directly — no bool mask round-trip
+            out_h = _sparse_block_attn(
+                q_h, k_h, v_h,
+                None, budget, block_size, causal, softmax_scale,
+                k_sel=k_sel, k_cnt=k_cnt,
+            )
+            out_grouped[:, hkv] = out_h
+
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# reference + self-test
+# --------------------------------------------------------------------------- #
+def _ref_block_attn(q, k, v, block_mask, block_size, causal):
+    """Slow torch reference: per q-block softmax over selected k-blocks (causal)."""
+    b, H, s, d = q.shape
+    nqb = (s + block_size - 1) // block_size
+    out = torch.zeros_like(q, dtype=torch.float32)
+    qf, kf, vf = q.float(), k.float(), v.float()
+    scale = 1.0 / math.sqrt(d)
+    for bi in range(b):
+        for h in range(H):
+            for qb in range(nqb):
+                q0, q1 = qb * block_size, min((qb + 1) * block_size, s)
+                sel = torch.where(block_mask[bi, h, qb])[0]
+                if sel.numel() == 0:
+                    continue
+                cols = torch.cat([torch.arange(kbi * block_size,
+                                                min((kbi + 1) * block_size, s), device=q.device)
+                                  for kbi in sel.tolist()])
+                sc = (qf[bi, h, q0:q1] @ kf[bi, h, cols].T) * scale
+                if causal:
+                    qpos = torch.arange(q0, q1, device=q.device)[:, None]
+                    sc = sc.masked_fill(qpos < cols[None, :], float("-inf"))
+                p = torch.softmax(sc, dim=-1)
+                out[bi, h, q0:q1] = p @ vf[bi, h, cols]
+    return out
+
+
+if __name__ == "__main__":
+    torch.manual_seed(0)
+    b, H, s, d = 1, 8, 2048, 128
+    bs, budget = 128, 8
+    q = torch.randn(b, H, s, d, device="cuda", dtype=torch.float16)
+    k = torch.randn(b, H, s, d, device="cuda", dtype=torch.float16)
+    v = torch.randn(b, H, s, d, device="cuda", dtype=torch.float16)
+    nqb = s // bs
+
+    # layer 0: all full (like Llama layer 0) -> produces sel0, no sparse heads
+    fh0 = torch.ones(H, dtype=torch.bool)
+    out0, sel0 = reuse_v1_layer(q, k, v, fh0, None, budget=budget, block_size=bs, segment_size=512)
+
+    # layer 1: heads 0-3 full, 4-7 sparse. sparse heads must use sel0 (previous!),
+    #          full heads produce sel1 for later layers.
+    fh1 = torch.tensor([1, 1, 1, 1, 0, 0, 0, 0], dtype=torch.bool)
+    out1, sel1 = reuse_v1_layer(q, k, v, fh1, sel0, budget=budget, block_size=bs, segment_size=512)
+
+    # full-head correctness (layer 1 heads 0-3) vs dense reference
+    full_idx = fh1.nonzero().flatten()
+    dense_bm = torch.tril(torch.ones(nqb, nqb, dtype=torch.bool, device="cuda"))[None, None]
+    dense_bm = dense_bm.expand(b, full_idx.numel(), nqb, nqb).contiguous()
+    ref_full = _ref_block_attn(q[:, full_idx], k[:, full_idx], v[:, full_idx], dense_bm, bs, True)
+    e_full = (out1[:, full_idx].float() - ref_full).abs().max().item()
+
+    # sparse-head correctness (layer 1 heads 4-7) vs ref over sel0 (the PREVIOUS selection)
+    sp_idx = (~fh1).nonzero().flatten()
+    sp_bm = sel0[:, None].expand(b, sp_idx.numel(), nqb, nqb).contiguous()
+    ref_sp = _ref_block_attn(q[:, sp_idx], k[:, sp_idx], v[:, sp_idx], sp_bm, bs, True)
+    e_sp = (out1[:, sp_idx].float() - ref_sp).abs().max().item()
+    used_prev = not torch.equal(sel0, sel1)   # sel1 differs -> confirms sparse used sel0 not sel1
+
+    # layer 2: no full heads -> carries sel1, sparse heads use sel1
+    fh2 = torch.zeros(H, dtype=torch.bool)
+    out2, sel2 = reuse_v1_layer(q, k, v, fh2, sel1, budget=budget, block_size=bs, segment_size=512)
+    carried_ok = torch.equal(sel2, sel1)
+    bm2 = sel1[:, None].expand(b, H, nqb, nqb).contiguous()
+    ref2 = _ref_block_attn(q, k, v, bm2, bs, True)
+    e2 = (out2.float() - ref2).abs().max().item()
+
+    print(f"full-head  err vs dense ref      : {e_full:.3e}")
+    print(f"sparse-head err vs PREV sel ref  : {e_sp:.3e}   (budget={budget} blocks)")
+    print(f"delayed update (sel1 != sel0)    : {used_prev}")
+    print(f"carry-forward at no-full layer   : {carried_ok}")
+    print(f"no-full layer err vs sel1 ref    : {e2:.3e}")
+
+    # ----------------------------------------------------------------------- #
+    # native GQA (Hkv < H): K/V never expanded. kv-head 0 full, kv-head 1 sparse.
+    # ----------------------------------------------------------------------- #
+    Hq, Hkv, Gg = 8, 2, 4
+    qg = torch.randn(b, Hq, s, d, device="cuda", dtype=torch.float16)
+    kg = torch.randn(b, Hkv, s, d, device="cuda", dtype=torch.float16)
+    vg = torch.randn(b, Hkv, s, d, device="cuda", dtype=torch.float16)
+    # seed a selection with an all-full layer, then a mixed layer
+    _, selg0 = reuse_v1_layer(qg, kg, vg, torch.ones(Hkv, dtype=torch.bool),
+                              None, budget=budget, block_size=bs, segment_size=512)
+    fhg = torch.tensor([1, 0], dtype=torch.bool)   # kv0 full, kv1 sparse
+    outg, _ = reuse_v1_layer(qg, kg, vg, fhg, selg0,
+                             budget=budget, block_size=bs, segment_size=512)
+    # reference: expand K/V to Hq q-heads
+    kge = kg.repeat_interleave(Gg, dim=1)
+    vge = vg.repeat_interleave(Gg, dim=1)
+    fq_g = torch.arange(0, Gg, device="cuda")            # kv0 -> q-heads 0..3 (dense)
+    sq_g = torch.arange(Gg, 2 * Gg, device="cuda")       # kv1 -> q-heads 4..7 (sparse)
+    dbm = torch.tril(torch.ones(nqb, nqb, dtype=torch.bool, device="cuda"))[None, None]
+    dbm = dbm.expand(b, Gg, nqb, nqb).contiguous()
+    refg_full = _ref_block_attn(qg[:, fq_g], kge[:, fq_g], vge[:, fq_g], dbm, bs, True)
+    eg_full = (outg[:, fq_g].float() - refg_full).abs().max().item()
+    sbm = selg0[:, None].expand(b, Gg, nqb, nqb).contiguous()
+    refg_sp = _ref_block_attn(qg[:, sq_g], kge[:, sq_g], vge[:, sq_g], sbm, bs, True)
+    eg_sp = (outg[:, sq_g].float() - refg_sp).abs().max().item()
+    print(f"GQA full-head err (Hkv=2,G=4)    : {eg_full:.3e}")
+    print(f"GQA sparse-head err vs prev sel  : {eg_sp:.3e}")
+
+    # reordered fast path: heads already full-first (kv0 full, kv1 sparse == n_full_kv=1).
+    # Same data as the mask path above -> must match bit-for-bit (only indexing differs).
+    outg_fast, _ = reuse_v1_layer(qg, kg, vg, None, selg0, budget=budget,
+                                  block_size=bs, segment_size=512, n_full_kv=1)
+    e_fast = (outg_fast.float() - outg.float()).abs().max().item()
+    print(f"reorder fast-path vs mask path   : {e_fast:.3e}   (n_full_kv, slice views)")

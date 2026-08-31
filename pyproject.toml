@@ -1,0 +1,28 @@
+[project]
+name = "pbs-attn-h"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "", email = "" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "torch==2.6.0",
+    "torchaudio==2.6.0",
+    "torchvision==0.21.0",
+]
+
+[project.scripts]
+pbs-attn-h = "pbs_attn_h:main"
+
+[[tool.uv.index]]
+url = "https://download.pytorch.org/whl/cu124"
+
+[build-system]
+requires = ["uv_build>=0.12.4,<0.13.0"]
+build-backend = "uv_build"
+
+[[tool.uv.index]]
+url = "https://pypi.org/simple"
+default = true

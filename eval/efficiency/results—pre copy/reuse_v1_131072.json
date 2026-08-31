@@ -1,0 +1,29 @@
+{
+    "script_args": {
+        "method": "reuse_v1",
+        "len": 131072,
+        "n_examples": 10,
+        "num_warmup_iter": 30,
+        "no_save": false,
+        "output_dir": "results",
+        "model_name": "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/data/Llama-3.1-8B-Instruct"
+    },
+    "method_args": {
+        "label_path": "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/pbs-attn/ckp/Llama-3.1-8B-Instruct/full_head_new_02.pt",
+        "budget": 32,
+        "block_size": 128,
+        "segment_size": 2048,
+        "sink_blocks": 1,
+        "local_blocks": 2,
+        "select_mode": "topp",
+        "top_p": 0.9,
+        "min_blocks": 8,
+        "max_blocks": 64,
+        "last_q_full": false
+    },
+    "model_name": "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/data/Llama-3.1-8B-Instruct",
+    "tokenizer_name": "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/data/Llama-3.1-8B-Instruct",
+    "num_tokens": 131072,
+    "avg_e2e_latency": 5.393163671875,
+    "e2e_std": 0.069925956428051
+}
