@@ -44,41 +44,22 @@ def parse_args():
         "--reg_mode",
         type=str,
         default="l1",
-        choices=["l1", "kuma", "ddp", "stg", "hc", "hln", "hcl"],
+        choices=["l1", "kuma", "hc"],
         help="reuse_v1 training regularizer / gate. 'l1' (default): deterministic "
         "clamped anchor_heads gate + L1 sparsity (byte-identical to the original "
         "path; --reg_weight applies). 'kuma': HardKuma stochastic gate (trainable "
         "per-(layer,kv-head) shape params a,b; z reparameterized inside each layer "
         "forward from frozen per-step noise) + an adaptive-lambda Lagrangian "
         "density constraint driving E[anchor fraction] toward --desired_density "
-        "(--reg_weight is IGNORED; lambda self-adapts). 'ddp': deterministic "
-        "differentiable pruning -- anchor_heads IS the learnable logit z_loga, "
-        "blend gate = straight-through clamp(z_loga,0,1); a 3-term LEARNABLE-lambda "
-        "Lagrangian on the annealed soft-saturation score drives the expected "
-        "SPARSE fraction toward --target_sparsity (--reg_weight IGNORED). Export "
-        "uses a deterministic top-k head mask hitting the exact target. Layer 0 "
-        "stays all-anchor. 'stg': Stochastic Gates -- anchor_heads IS mu_code, "
-        "z = clip(mu+0.5+sigma*eps, 0,1), eps~N(0,1); adaptive single-lambda "
-        "Lagrangian drives mean(Phi(mu/sigma)) toward 1-target_sparsity; "
-        "export = global top-k on mu_code. Layer 0 stays all-anchor. "
+        "(--reg_weight is IGNORED; lambda self-adapts). "
         "'hc': Hard Concrete (Louizos et al. ICLR 2018) -- anchor_heads IS "
         "log_alpha, z = clamp(sigmoid((logit(u)+log_alpha)/beta)*(zeta-gamma)+gamma,0,1), "
-        "u~Uniform(0,1) frozen per step; single-parameter per head; adaptive "
-        "single-lambda Lagrangian drives mean(P(z>0)) toward 1-target_sparsity; "
-        "export = global top-k on log_alpha. Layer 0 stays all-anchor. "
-        "'hcl': Hard Concrete + Lagrangian -- same HC gate as 'hc' (anchor_heads IS "
-        "log_alpha, z = clamp(sigmoid((logit(u)+log_alpha)/beta)*(zeta-gamma)+gamma,0,1)); "
-        "density = mean(sigmoid(log_alpha)) = mean(P(z>0.5)), aligned with export "
-        "threshold log_alpha>0; adaptive single-lambda Lagrangian drives density "
-        "toward 1-target_sparsity; export = log_alpha>0 (or top-k). "
-        "Layer 0 stays all-anchor. "
-        "'hln': Hard Logistic-Normal -- anchor_heads IS mu; "
-        "z = clamp(sigmoid(mu+sigma*eps)*(zeta-gamma)+gamma, 0,1), eps~N(0,1) "
-        "frozen per step; Normal->sigmoid->stretch->clip structure (like HardKuma) "
-        "gives nonzero mass at 0 and 1; adaptive single-lambda Lagrangian drives "
-        "mean(Phi(mu/sigma)) toward 1-target_sparsity; sigma is --hln_sigma "
-        "(global temperature, not per-head); export = global top-k on mu. "
-        "Layer 0 stays all-anchor.",
+        "u~Uniform(0,1) frozen per step; single-parameter per head; fixed "
+        "--reg_weight L0 penalty sum(P(z>0)) over layers 1..L-1; export = global "
+        "top-k on log_alpha over layers 1..L-1 hitting exactly "
+        "--target_sparsity. All modes keep layer 0 all-anchor (hc freezes its "
+        "log_alpha at +10), so it is excluded from both the penalty and the "
+        "top-k.",
     )
     parser.add_argument(
         "--desired_density",
@@ -95,7 +76,7 @@ def parse_args():
         "--lagrange_lr",
         type=float,
         default=0.001,
-        help="--reg_mode kuma/stg: multiplicative step for the adaptive Lagrange "
+        help="--reg_mode kuma: multiplicative step for the adaptive Lagrange "
         "multiplier update lambda *= exp(lagrange_lr * constraint_violation). "
         "Default 0.001 matches the reference train_kuma_multi_passkey.sh.",
     )
@@ -108,116 +89,22 @@ def parse_args():
         "train_kuma_multi_passkey.sh.",
     )
     parser.add_argument("--initial_value", type=float, default=1.0)
-    # --- reg_mode ddp only ------------------------------------------------
+    # --- reg_mode hc export only ------------------------------------------
     parser.add_argument(
         "--target_sparsity",
         type=float,
         default=0.7695,
-        help="--reg_mode ddp only: target fraction of (layer>=1) kv-heads that "
-        "are SPARSE (zeroed). The learnable-lambda Lagrangian drives the annealed "
-        "expected sparsity 1 - score.mean() toward this; export zeroes exactly "
-        "round(target_sparsity * L * H) lowest-scoring heads. NOTE: the DDP "
-        "reference (train.sh) prunes only 0.20; 0.7695 here is a reuse_v1 goal "
-        "choice (~77% sparse, matching the kuma density=0.23 run). Lower for a "
-        "denser label.",
-    )
-    parser.add_argument(
-        "--lambda_1_lr",
-        type=float,
-        default=2e-2,
-        help="--reg_mode ddp only: dual-ascent lr for the linear multiplier "
-        "lambda_1 on (expected_sparsity - target). Default 2e-2 (DDP reference).",
-    )
-    parser.add_argument(
-        "--lambda_2_lr",
-        type=float,
-        default=4e-1,
-        help="--reg_mode ddp only: dual-ascent lr for the quadratic multiplier "
-        "lambda_2 on (expected_sparsity - target)^2. Default 4e-1 (DDP reference).",
-    )
-    parser.add_argument(
-        "--lambda_3_lr",
-        type=float,
-        default=None,
-        help="--reg_mode ddp only: dual-ascent lr for the binary-entropy "
-        "multiplier lambda_3 on mean((1-score)*score). None -> falls back to "
-        "--lambda_1_lr. Ignored if --no_binary_loss.",
-    )
-    parser.add_argument(
-        "--no_binary_loss",
-        action="store_true",
-        help="--reg_mode ddp only: drop the lambda_3 binary-entropy term "
-        "((1-score)*score, pushes score toward hard 0/1).",
+        help="--reg_mode hc export only: target fraction of kv-heads that are "
+        "SPARSE (zeroed). Export zeroes exactly round(target_sparsity * L * H) "
+        "lowest-scoring heads (global top-k on log_alpha). Lower for a denser "
+        "label. Default 0.7695 (~77% sparse, matching the kuma density=0.23 run).",
     )
     parser.add_argument(
         "--uniform_sparsity",
         action="store_true",
-        help="--reg_mode ddp only: export with a per-LAYER top-k (each layer>=1 "
+        help="--reg_mode hc export only: use a per-LAYER top-k (each layer "
         "zeroes the same round(target_sparsity*H) count) instead of one global "
-        "top-k over all (layer>=1, head) slots.",
-    )
-    parser.add_argument(
-        "--z_loga_clamp_min",
-        type=float,
-        default=-0.1,
-        help="--reg_mode ddp only: per-step lower floor for the raw logit "
-        "z_loga (anchor_heads). Upper clamp is fixed at 1.1 (LIMIT_B) to prevent "
-        "soft_saturation_score from saturating. Default -0.1 (DDP reference).",
-    )
-    parser.add_argument(
-        "--lambda_init_value",
-        type=float,
-        default=1.0,
-        help="--reg_mode ddp/stg only: initial value for learnable Lagrange multipliers "
-        "lambda_1, lambda_2, lambda_3 (ddp) or lambda0 (stg). Non-zero init ensures "
-        "sparsity pressure from step 1 (cold-start). Default 1.0.",
-    )
-    parser.add_argument(
-        "--stg_sigma",
-        type=float,
-        default=0.5,
-        help="--reg_mode stg only: noise scale sigma for the Gaussian stochastic gate. "
-        "z = clip(mu + 0.5 + sigma * eps, 0, 1). "
-        "Default 0.5 (official STG). Smaller values (e.g. 0.3) concentrate the "
-        "distribution and speed up polarization.",
-    )
-    parser.add_argument(
-        "--hln_sigma",
-        type=float,
-        default=0.5,
-        help="--reg_mode hln only: noise scale sigma (global temperature) for the "
-        "Hard Logistic-Normal gate. z = clamp(sigmoid(mu+sigma*eps)*(zeta-gamma)+gamma,0,1). "
-        "density = Phi(mu/sigma); sigma is NOT per-head to avoid hijacking the Lagrangian. "
-        "Default 0.5. Smaller values sharpen the gate; minimum enforced at HLN_SIGMA_MIN.",
-    )
-    parser.add_argument(
-        "--anneal_schedule",
-        type=str,
-        default="sqrt",
-        choices=["sqrt", "linear", "quad"],
-        help="--reg_mode ddp only: how the soft-saturation mean anneals from "
-        "0.5 down to --anneal_mean_min over training. Default sqrt.",
-    )
-    parser.add_argument(
-        "--anneal_mean_min",
-        type=float,
-        default=0.1,
-        help="--reg_mode ddp only: final (min) soft-saturation mean; smaller -> "
-        "sharper gate. Default 0.1 (DDP reference).",
-    )
-    parser.add_argument(
-        "--anneal_warmup_ratio",
-        type=float,
-        default=0.0,
-        help="--reg_mode ddp only: hold the soft-saturation mean at 0.5 for this "
-        "initial fraction of steps before annealing. Default 0.0.",
-    )
-    parser.add_argument(
-        "--z_loga_init_std",
-        type=float,
-        default=1e-2,
-        help="--reg_mode ddp only: std of the Gaussian noise added to the logit "
-        "init (mean=--initial_value) for layers >=1. Default 1e-2 (DDP reference).",
+        "top-k over all (layer, head) slots.",
     )
     parser.add_argument(
         "--select_mode",
@@ -235,7 +122,7 @@ def parse_args():
     parser.add_argument(
         "--top_p",
         type=float,
-        default=0.9,
+        default=0.7,
         help="--select_mode topp only: cumulative mean-mass threshold (nucleus).",
     )
     parser.add_argument(
@@ -302,15 +189,6 @@ def parse_args():
         "higher activation memory. Safe under sp_size>1 (each rank only holds "
         "seq/sp_size tokens, so activation memory is proportionally reduced). "
         "Do NOT use with sp_size=1 at 128k (will OOM).",
-    )
-    parser.add_argument(
-        "--hc_force_layer0",
-        action="store_true",
-        help="--reg_mode hc/hcl only: revert to the old design where layer 0 is "
-        "forced all-anchor (gate frozen at 1, no streaming fallback). When set, "
-        "hc behaves like the pre-streaming-fallback mode: layer 0 always dense, "
-        "L0 excluded from the L0 penalty, and label[0] forced True at export. "
-        "Default off (new streaming-fallback design).",
     )
     parser.add_argument("--rope_theta", type=float, default=None)
     parser.add_argument("--device", type=str, default="0")

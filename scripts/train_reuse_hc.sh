@@ -3,7 +3,7 @@
 # (--reg_mode hc), ORIGINAL Louizos 2018 formulation: fixed L0 penalty.
 #
 # Hard Concrete (original, no Lagrangian):
-#   loss = distill_loss + reg_weight * sum_{layer>=1} P(z_h != 0)
+#   loss = distill_loss + reg_weight * sum_{all layers} P(z_h != 0)
 #        = distill_loss + reg_weight * sum sigmoid(log_alpha_h + 1.599)
 #
 #   Distill loss pulls important heads to alpha >> 0 (z≈1, anchor).
@@ -19,16 +19,27 @@
 #     larger reg_weight → more sparse    (try 0.2 for ~79% sparse)
 #     smaller reg_weight → less sparse   (try 0.05 for ~50% sparse)
 #   Start with reg_weight=0.1, adjust by 2x based on observed l0_density.
+#   Logged metrics (wandb + progress bar), both over layers 1..L-1:
+#     l0_density  = mean P(z != 0) = mean sigmoid(log_alpha + 1.5986)
+#                   -- the true Hard Concrete L0 density; tune reg_weight on this
+#     anchor_frac = fraction with P(z != 0) > 0.5, i.e. log_alpha > -1.5986
 #   target_sparsity is used ONLY at export (top-k cutoff), not during training.
 #
 # Usage:
-#   bash scripts/train_reuse_hc.sh <model_path> <ctx_len_min> <ctx_len_max> <lr> <num_passkey> [sp_size] [reg_weight] [initial_value] [target_sparsity] [force_layer0]
+#   bash scripts/train_reuse_hc.sh <model_path> <ctx_len_min> <ctx_len_max> <lr> <num_passkey> [sp_size] [reg_weight] [initial_value] [target_sparsity] [top_p]
 #
 #   sp_size          Ulysses SP group size. Default 8.
 #   reg_weight       L0 penalty coefficient. Default 0.1.
 #   initial_value    Initial log_alpha. Default 0.0.
 #   target_sparsity  Fraction of heads to export as sparse (top-k cutoff). Default 0.79.
-#   force_layer0     1 = revert to old design (layer 0 frozen all-anchor). Default 0 (new streaming-fallback).
+#   top_p            Nucleus coverage for topp block selection. Default 0.7.
+#                    MUST match the inference-time top_p, or the exported head
+#                    labels will not transfer.
+#
+#   Layer 0 is forced all-anchor (log_alpha frozen at +10, requires_grad=False),
+#   so it always fills every kv-head slot of the anchor cache. It is excluded
+#   from the L0 penalty and from the export top-k. There is no streaming
+#   fallback: inference rejects any label whose layer 0 is not all-anchor.
 set -euo pipefail
 
 export TOKENIZERS_PARALLELISM=true
@@ -48,19 +59,9 @@ sp_size=${6:-8}
 reg_weight=${7:-0.1}
 initial_value=${8:-0.0}
 target_sparsity=${9:-0.79}
-force_layer0=${10:-0}
+top_p=${10:-0.7}
 
-force_layer0_flag=""
-if [ "${force_layer0}" = "1" ]; then
-    force_layer0_flag="--hc_force_layer0"
-fi
-
-setting="hc-orig-rw=${reg_weight}-init=${initial_value}-sp=${target_sparsity}-lr=${lr}-ctx=${ctx_len_min}_${ctx_len_max}-multi_passkey${num_passkey}-sp${sp_size}"
-if [ "${force_layer0}" = "1" ]; then
-    setting="${setting}-force_l0"
-else
-    setting="${setting}-not_force_l0"
-fi
+setting="hc-orig-rw=${reg_weight}-init=${initial_value}-sp=${target_sparsity}-tp=${top_p}-lr=${lr}-ctx=${ctx_len_min}_${ctx_len_max}-multi_passkey${num_passkey}-sp${sp_size}"
 exp_name="reuse_v1/${model_name}/${setting}"
 
 torchrun --nnodes 1 --nproc_per_node 8 \
@@ -77,7 +78,7 @@ torchrun --nnodes 1 --nproc_per_node 8 \
     --initial_value "${initial_value}" \
     --target_sparsity "${target_sparsity}" \
     --select_mode topp \
-    --top_p 0.9 \
+    --top_p "${top_p}" \
     --min_blocks 8 \
     --max_blocks 64 \
     --min_needle_depth_ratio 0.05 \
@@ -92,5 +93,4 @@ torchrun --nnodes 1 --nproc_per_node 8 \
     --two_pass \
     --no_ac \
     --sp_size "${sp_size}" \
-    ${force_layer0_flag} \
     --output_dir "attn_patterns/${exp_name}"

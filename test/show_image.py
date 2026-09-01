@@ -68,7 +68,9 @@ def main(args):
     expected_answer = tokenize(args.expected_answer)
 
     data = []
-    flat_json = glob.glob(f"{path}/*.json")
+    # Sharded runs (one results_gpu<N>.json per GPU) must all be merged, so read
+    # every flat-format file under path instead of stopping at the first one.
+    flat_json = sorted(glob.glob(f"{path}/*.json"))
     for candidate in flat_json:
         with open(candidate, 'r') as f:
             try:
@@ -85,7 +87,6 @@ def main(args):
                     "Context Length": round_to_nearest_k(int(length_str), round_k),
                     "Score": score,
                 })
-            break
 
     if not data:
         raise SystemExit(f"No flat results.json found under {path}")

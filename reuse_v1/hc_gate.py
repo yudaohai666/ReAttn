@@ -18,10 +18,9 @@ Key properties vs HardKuma:
   * P(z > 0) gradient: d/d(log_alpha) sigmoid(...) is always nonzero and is
     MAXIMIZED at log_alpha = -beta*log(-gamma/zeta) (the "middle" head) -- the
     opposite of the kuma (a≈b≈1) dead zone.
-  * Density = mean P(z_h > 0) = mean sigmoid((log_alpha + beta*log(-gamma/zeta))/1)
-    drives the Lagrangian exactly like kuma's hardkuma_density.
-  * Export: log_alpha > 0 <=> P(z > 0.5) > 0.5; use global top-k on log_alpha
-    to hit exact target_sparsity (monotone with density).
+  * L0 penalty = sum P(z_h > 0) with a FIXED --reg_weight (no Lagrangian).
+  * Export: log_alpha is monotone with P(z > 0), so global top-k on log_alpha
+    hits the exact target_sparsity.
 
 Noise convention: u is drawn ONCE per step with a rank-shared seed (outside all
 forward / AC regions) and stored in holder.hc_noise, exactly mirroring the kuma
@@ -31,7 +30,6 @@ frozen u, so the gradient stays in the FSDP-hooked forward.
 
 import math
 import torch
-from torch.nn import functional as F
 
 # Hard Concrete hyper-parameters (Louizos et al. defaults).
 HC_BETA  = 2.0 / 3.0   # temperature
@@ -66,37 +64,46 @@ def hc_p_nonzero(log_alpha, beta=HC_BETA, gamma=HC_GAMMA, zeta=HC_ZETA):
     return torch.sigmoid(log_alpha - shift)
 
 
-def hc_density(log_alpha, beta=HC_BETA, gamma=HC_GAMMA, zeta=HC_ZETA):
-    """Expected anchor (z>0) fraction: mean P(z_h > 0) over all gates.
+def deterministic_head_mask(log_alpha, target_sparsity, uniform_sparsity=False,
+                            layer0_forced=True):
+    """Deploy readout: zero the lowest-scoring heads to hit exact target sparsity.
 
-    This is what the Lagrangian density constraint drives toward desired_density.
+    Returns a hard {0,1} mask of shape log_alpha.shape; 1 -> anchor (dense), 0 ->
+    sparse. With ``uniform_sparsity`` each layer zeros the same per-layer count;
+    otherwise a single global top-k over the eligible slots.
+
+    ``layer0_forced=True``: layer 0 is always all-anchor, so the zeros are drawn
+    from layers 1..L-1 only (``soft[0]`` is set to +inf before the top-k).
+    ``layer0_forced=False``: layer 0 participates in the top-k competition on
+    equal terms.
     """
-    return hc_p_nonzero(log_alpha, beta, gamma, zeta).mean()
-
-
-def hc_p_positive(log_alpha, beta=HC_BETA, gamma=HC_GAMMA, zeta=HC_ZETA):
-    """P(z > 0.5): probability that the gate is in the anchor half.
-
-    Used as an alternative density measure aligned with the z>0.5 export
-    threshold (mirroring STG's Phi(mu/sigma) = P(z>0.5)).
-
-    P(z > 0.5) = P(z_bar > 0.5) = P(s > (0.5 - gamma)/(zeta - gamma))
-               = P(logit(u) + log_alpha > beta * logit((0.5-gamma)/(zeta-gamma)))
-               = sigmoid( (log_alpha - beta * logit((0.5-gamma)/(zeta-gamma))) )
-    """
-    x = (0.5 - gamma) / (zeta - gamma)   # (0.5 - (-0.1)) / (1.1 - (-0.1)) = 0.5
-    # x = 0.5 exactly with the default gamma/zeta, so logit(x) = 0.
-    # -> P(z > 0.5) = sigmoid(log_alpha / beta * ... ) simplifies.
-    logit_x = math.log(x / (1.0 - x))    # logit(0.5) = 0 for defaults
-    return torch.sigmoid((log_alpha - beta * logit_x))
-
-
-def hc_export_score(log_alpha):
-    """Score for deterministic export: higher = more anchor.
-
-    log_alpha is monotone with both hc_p_nonzero and hc_p_positive, so
-    global top-k on log_alpha gives exactly target_sparsity anchor heads.
-    Export threshold: log_alpha > 0 <=> P(z>0) > 0.5 (with default params,
-    P(z>0.5) > 0.5 as well since logit(0.5)=0).
-    """
-    return log_alpha
+    L, H = log_alpha.shape
+    # Rank on the RAW log_alpha. It is monotone with P(z > 0) = sigmoid(log_alpha
+    # - shift), so top-k on log_alpha == top-k on P(z > 0). Do NOT relu() first:
+    # the L0 penalty drives most heads to log_alpha < 0, so relu would collapse
+    # exactly the heads being ranked into one big tie at 0.0 and torch.topk would
+    # then break the tie by flat index, i.e. by (layer, head) number instead of by
+    # the learned value.
+    soft = log_alpha.detach().clone().float()
+    hard = torch.ones_like(soft)
+    if uniform_sparsity:
+        start_layer = 1 if layer0_forced else 0
+        k = round(target_sparsity * H)
+        for layer in range(start_layer, L):
+            row = soft[layer].clone()
+            marks = torch.ones(H, device=soft.device)
+            if k > 0:
+                _, idx = torch.topk(row, k=min(k, H), largest=False)
+                marks[idx] = 0.0
+            hard[layer] = marks
+    else:
+        if layer0_forced:
+            soft[0] = float("inf")
+        num_zeros = round(target_sparsity * L * H)
+        flat = soft.reshape(-1).clone()
+        if num_zeros > 0:
+            _, idx = torch.topk(flat, k=min(num_zeros, flat.numel()), largest=False)
+            hard.reshape(-1)[idx] = 0.0
+    if layer0_forced:
+        hard[0, :] = 1.0
+    return hard

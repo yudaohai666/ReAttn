@@ -1,0 +1,100 @@
+Len=36608|N=798|D=0.823|R=0.221|l0=0.434|rw=0.001|LR=1.00e-02:  52%|█▌ | 1039/2000 [57:38<42:24,  2.65s/it]Traceback (most recent call last):
+  File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/reuse_v1/train_reuse.py", line 851, in <module>
+    main(args)
+  File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/reuse_v1/train_reuse.py", line 822, in main
+    train(args, model, rank, world_size, train_dataloader, optimizer,
+  File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/reuse_v1/train_reuse.py", line 365, in train
+    model(input_ids=ids_local,
+  File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1773, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1879, in _call_impl
+    return inner()
+           ^^^^^^^
+  File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1827, in inner
+    result = forward_call(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/.venv/lib/python3.11/site-packages/transformers/utils/generic.py", line 963, in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/.venv/lib/python3.11/site-packages/transformers/utils/output_capturing.py", line 248, in wrapper
+    outputs = func(self, *args, **kwargs)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/.venv/lib/python3.11/site-packages/transformers/models/llama/modeling_llama.py", line 411, in forward
+    hidden_states = decoder_layer(
+                    ^^^^^^^^^^^^^^
+  File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/.venv/lib/python3.11/site-packages/transformers/modeling_layers.py", line 93, in __call__
+    return super().__call__(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1773, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1879, in _call_impl
+    return inner()
+           ^^^^^^^
+  File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1827, in inner
+    result = forward_call(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/.venv/lib/python3.11/site-packages/transformers/models/llama/modeling_llama.py", line 316, in forward
+    hidden_states, _ = self.self_attn(
+                       ^^^^^^^^^^^^^^^
+  File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1773, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1784, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/reuse_v1/patch/reuse_train_llama.py", line 595, in llama_reuse_v1_forward_two_way
+    if z[h_local].item() > 0.5:
+       ^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/reuse_v1/train_reuse.py", line 851, in <module>
+[rank0]:     main(args)
+[rank0]:   File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/reuse_v1/train_reuse.py", line 822, in main
+[rank0]:     train(args, model, rank, world_size, train_dataloader, optimizer,
+[rank0]:   File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/reuse_v1/train_reuse.py", line 365, in train
+[rank0]:     model(input_ids=ids_local,
+[rank0]:   File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1773, in _wrapped_call_impl
+[rank0]:     return self._call_impl(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1879, in _call_impl
+[rank0]:     return inner()
+[rank0]:            ^^^^^^^
+[rank0]:   File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1827, in inner
+[rank0]:     result = forward_call(*args, **kwargs)
+[rank0]:              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/.venv/lib/python3.11/site-packages/transformers/utils/generic.py", line 963, in wrapper
+[rank0]:     output = func(self, *args, **kwargs)
+[rank0]:              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/.venv/lib/python3.11/site-packages/transformers/utils/output_capturing.py", line 248, in wrapper
+[rank0]:     outputs = func(self, *args, **kwargs)
+[rank0]:               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/.venv/lib/python3.11/site-packages/transformers/models/llama/modeling_llama.py", line 411, in forward
+[rank0]:     hidden_states = decoder_layer(
+[rank0]:                     ^^^^^^^^^^^^^^
+[rank0]:   File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/.venv/lib/python3.11/site-packages/transformers/modeling_layers.py", line 93, in __call__
+[rank0]:     return super().__call__(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1773, in _wrapped_call_impl
+[rank0]:     return self._call_impl(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1879, in _call_impl
+[rank0]:     return inner()
+[rank0]:            ^^^^^^^
+[rank0]:   File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1827, in inner
+[rank0]:     result = forward_call(*args, **kwargs)
+[rank0]:              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/.venv/lib/python3.11/site-packages/transformers/models/llama/modeling_llama.py", line 316, in forward
+[rank0]:     hidden_states, _ = self.self_attn(
+[rank0]:                        ^^^^^^^^^^^^^^^
+[rank0]:   File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1773, in _wrapped_call_impl
+[rank0]:     return self._call_impl(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1784, in _call_impl
+[rank0]:     return forward_call(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/reuse_v1/patch/reuse_train_llama.py", line 595, in llama_reuse_v1_forward_two_way
+[rank0]:     if z[h_local].item() > 0.5:
+[rank0]:        ^^^^^^^^^^^^^^^^^
+[rank0]: KeyboardInterrupt

@@ -1,0 +1,44 @@
+2026-09-01 11:02:25,782 INFO    MainThread:172684 [wandb_setup.py:_flush():81] Current SDK version is 0.29.0
+2026-09-01 11:02:25,782 INFO    MainThread:172684 [wandb_setup.py:_flush():81] Configure stats pid to 172684
+2026-09-01 11:02:25,782 INFO    MainThread:172684 [wandb_setup.py:_flush():81] Loading settings from environment variables
+2026-09-01 11:02:25,782 INFO    MainThread:172684 [wandb_init.py:setup_run_log_directory():739] Logging user logs to /root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/wandb/run-20260901_110225-sro2ahwq/logs/debug.log
+2026-09-01 11:02:25,782 INFO    MainThread:172684 [wandb_init.py:setup_run_log_directory():740] Logging internal logs to /root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/wandb/run-20260901_110225-sro2ahwq/logs/debug-internal.log
+2026-09-01 11:02:25,783 INFO    MainThread:172684 [wandb_init.py:init():783] calling init triggers
+2026-09-01 11:02:25,783 INFO    MainThread:172684 [wandb_init.py:init():788] wandb.init called with sweep_config: {}
+config: {'model_name': '/root/paddlejob/share-storage/gpfs/system-public/yudaohai/data/Llama-3.1-8B-Instruct', 'config_name': None, 'dataset_name': 'datasets/PaulGrahamEssays.jsonl', 'dataset_format': 'multiple_passkey', 'split': 'train', 'lr': 0.01, 'num_steps': 2000, 'batch_size': 1, 'max_length': 128000, 'context_length_min': 8000, 'context_length_max': 128000, 'context_lengths_num_intervals': 50, 'depth_ratio_num_intervals': 1000, 'num_passkeys': 10, 'output_dir': 'attn_patterns/reuse_v1//root/paddlejob/share-storage/gpfs/system-public/yudaohai/data/Llama-3.1-8B-Instruct/hc-orig-rw=0.0013-init=0.0-sp=0.8-lr=0.01-ctx=8000_128000-multi_passkey10-sp8', 'sink_size': 64, 'recent_size': 256, 'deploy_sink_size': None, 'deploy_recent_size': None, 'reg_weight': 0.0013, 'reg_mode': 'hc', 'desired_density': 0.08333, 'lagrange_lr': 0.001, 'lamda_init_value': 2.0, 'initial_value': 0.0, 'target_sparsity': 0.8, 'uniform_sparsity': False, 'select_mode': 'topp', 'top_p': 0.7, 'min_blocks': 8, 'max_blocks': 64, 'exp_name': None, 'enable_pp': False, 'enable_tp': False, 'disable_wandb': False, 'min_needle_depth_ratio': 0.05, 'max_needle_depth_ratio': 0.95, 'save_steps': 50, 'gradient_accumulation_steps': 1, 'resume': False, 'sp_size': 8, 'two_pass': True, 'ac_group_size': 1, 'no_ac': True, 'rope_theta': None, 'device': 'cuda:0', 'streaming_attn_implementation': 'blocksparse', 'supervision': 'distill', 'n_samples': None, 'task': 'default', 'attn_load_dir': None, 'threshold': 0.5, 'sparsity': None, 'passkey_length': 32, 'context_length': 16384, 'generation_length': 256, 'stride_length': 256, 'prefilling_chunk_size': 4096, 'seed': 42, '_wandb': {}}
+2026-09-01 11:02:25,783 INFO    MainThread:172684 [wandb_init.py:init():831] starting backend
+2026-09-01 11:02:25,783 INFO    MainThread:172684 [wandb_init.py:init():846] sending inform_init request
+2026-09-01 11:02:26,790 INFO    MainThread:172684 [wandb_init.py:init():851] backend started and connected
+2026-09-01 11:02:26,792 INFO    MainThread:172684 [wandb_init.py:init():921] updated telemetry
+2026-09-01 11:02:26,802 INFO    MainThread:172684 [wandb_init.py:init():944] communicating run to backend with 90.0 second timeout
+2026-09-01 11:02:28,689 INFO    MainThread:172684 [wandb_init.py:init():981] starting run threads in backend
+2026-09-01 11:02:28,757 INFO    MainThread:172684 [wandb_run.py:_console_start():2545] atexit reg
+2026-09-01 11:02:28,758 INFO    MainThread:172684 [wandb_run.py:_redirect():2395] redirect: wrap_raw
+2026-09-01 11:02:28,758 INFO    MainThread:172684 [wandb_run.py:_redirect():2464] Wrapping output streams.
+2026-09-01 11:02:28,758 INFO    MainThread:172684 [wandb_run.py:_redirect():2487] Redirects installed.
+2026-09-01 11:02:28,773 INFO    MainThread:172684 [wandb_init.py:init():1019] run started, returning control to user process
+2026-09-01 12:00:10,512 INFO    wandb-AsyncioManager-main:172684 [service_client.py:_forward_responses():122] [no run ID] Reached EOF.
+2026-09-01 12:00:10,513 INFO    wandb-AsyncioManager-main:172684 [mailbox.py:close():154] [no run ID] Closing mailbox, abandoning 2 handles.
+2026-09-01 12:00:10,514 ERROR   wandb-AsyncioManager-main:172684 [asyncio_manager.py:fn_wrap_exceptions():197] Uncaught exception in run_soon callback.
+Traceback (most recent call last):
+  File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/.venv/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 195, in fn_wrap_exceptions
+    await fn()
+  File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/.venv/lib/python3.11/site-packages/wandb/sdk/lib/run_messages.py", line 90, in loop
+    await asyncio_compat.race(
+  File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/.venv/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_compat.py", line 279, in race
+    async with open_task_group(race=True) as tg:
+  File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/uv/python/cpython-3.11.12-linux-x86_64-gnu/lib/python3.11/contextlib.py", line 217, in __aexit__
+    await anext(self.gen)
+  File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/.venv/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_compat.py", line 241, in open_task_group
+    await task_group._wait_all(race=race, timeout=exit_timeout)
+  File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/.venv/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_compat.py", line 181, in _wait_all
+    raise exc
+  File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/.venv/lib/python3.11/site-packages/wandb/sdk/lib/run_messages.py", line 113, in _print_all
+    result = await handle.wait_async(timeout=None)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/.venv/lib/python3.11/site-packages/wandb/sdk/mailbox/mailbox_handle.py", line 127, in wait_async
+    response = await self._handle.wait_async(timeout=timeout)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/.venv/lib/python3.11/site-packages/wandb/sdk/mailbox/response_handle.py", line 123, in wait_async
+    raise HandleAbandonedError()
+wandb.sdk.mailbox.mailbox_handle.HandleAbandonedError

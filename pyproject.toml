@@ -1,28 +1,77 @@
 [project]
-name = "pbs-attn-h"
+name = "reattn"
 version = "0.1.0"
-description = "Add your description here"
+description = "ReAttn: attention reuse training and evaluation"
 readme = "README.md"
 authors = [
-    { name = "", email = "" }
+    { name = "daohaiyu", email = "" }
 ]
-requires-python = ">=3.10"
+# extensions (flash-attn, block_sparse_attn_cuda).
+requires-python = ">=3.11,<=3.12"
 dependencies = [
-    "torch==2.6.0",
-    "torchaudio==2.6.0",
-    "torchvision==0.21.0",
+    # core
+    "torch==2.8.0",
+    "torchaudio",
+    "torchvision",
+    "numpy==1.26.4", # must stay <2: pinned by the prebuilt extensions and opencompass
+    # training stack
+    "transformers==5.6.0",
+    "tokenizers",
+    "accelerate==1.14.0",
+    "datasets==3.6.0",
+    "safetensors==0.8.0",
+    "einops==0.8.2",
+    "protobuf==7.36.0",
+    "psutil==7.2.2",
+    "tqdm==4.70.0",
+    "matplotlib==3.10.9",
+    "wandb",
+    # fused attention kernels (compiled, see tool.uv.no-build-isolation-package)
+    "flash-attn==2.7.4.post1",
+    "block-sparse-attn==0.0.2",
+    # required in-env: flash-attn / block-sparse-attn are built without build
+    # isolation, so their setup.py needs setuptools available here.
+    "setuptools>=78.1.0",
+    "wheel",
+]
+
+[project.optional-dependencies]
+# Heavy eval stack, pulls ~80 transitive packages. Install with:
+#   uv sync --extra eval
+eval = [
+    "opencompass==0.4.2",
+    "minference==0.1.6.0",
+    "evaluate==0.4.6",
+    "pandas==1.5.3",
+    "scikit-learn==1.5.0",
+    "seaborn==0.13.2",
+    "h5py==3.16.0",
 ]
 
 [project.scripts]
-pbs-attn-h = "pbs_attn_h:main"
+reattn = "reattn:main"
+
+[tool.uv]
+# flash-attn and block-sparse-attn import torch inside setup.py, so they cannot
+# be built in an isolated environment.
+no-build-isolation-package = ["flash-attn", "block-sparse-attn"]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cuda129" }
+torchaudio = { index = "pytorch-cuda129" }
+torchvision = { index = "pytorch-cuda129" }
+block-sparse-attn = { path = "Block-Sparse-Attention", editable = true }
 
 [[tool.uv.index]]
-url = "https://download.pytorch.org/whl/cu124"
+name = "pypi"
+url = "https://pypi.org/simple"
+default = true
+
+[[tool.uv.index]]
+name = "pytorch-cuda129"
+url = "https://download.pytorch.org/whl/cu129"
+explicit = true
 
 [build-system]
 requires = ["uv_build>=0.12.4,<0.13.0"]
 build-backend = "uv_build"
-
-[[tool.uv.index]]
-url = "https://pypi.org/simple"
-default = true

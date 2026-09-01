@@ -1,0 +1,145 @@
+{
+  "os":  "Linux-5.15.0-124-generic-x86_64-with-glibc2.39",
+  "python":  "CPython 3.11.12",
+  "startedAt":  "2026-09-01T03:02:25.772455Z",
+  "args":  [
+    "--model_name",
+    "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/data/Llama-3.1-8B-Instruct",
+    "--batch_size",
+    "1",
+    "--max_length",
+    "128000",
+    "--dataset_name",
+    "datasets/PaulGrahamEssays.jsonl",
+    "--dataset_format",
+    "multiple_passkey",
+    "--num_steps",
+    "2000",
+    "--lr",
+    "0.01",
+    "--reg_mode",
+    "hc",
+    "--reg_weight",
+    "0.0013",
+    "--initial_value",
+    "0.0",
+    "--target_sparsity",
+    "0.8",
+    "--select_mode",
+    "topp",
+    "--top_p",
+    "0.7",
+    "--min_blocks",
+    "8",
+    "--max_blocks",
+    "64",
+    "--min_needle_depth_ratio",
+    "0.05",
+    "--max_needle_depth_ratio",
+    "0.95",
+    "--context_length_min",
+    "8000",
+    "--context_length_max",
+    "128000",
+    "--context_lengths_num_intervals",
+    "50",
+    "--depth_ratio_num_intervals",
+    "1000",
+    "--gradient_accumulation_steps",
+    "1",
+    "--num_passkeys",
+    "10",
+    "--save_steps",
+    "50",
+    "--two_pass",
+    "--no_ac",
+    "--sp_size",
+    "8",
+    "--output_dir",
+    "attn_patterns/reuse_v1//root/paddlejob/share-storage/gpfs/system-public/yudaohai/data/Llama-3.1-8B-Instruct/hc-orig-rw=0.0013-init=0.0-sp=0.8-lr=0.01-ctx=8000_128000-multi_passkey10-sp8"
+  ],
+  "program":  "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/reuse_v1/train_reuse.py",
+  "codePath":  "reuse_v1/train_reuse.py",
+  "codePathLocal":  "reuse_v1/train_reuse.py",
+  "git":  {
+    "remote":  "https://github.com/yudaohai666/ReAttn.git",
+    "commit":  "a1c0c28e6daf713e2df85988dba61eedd286bd26"
+  },
+  "email":  "yudaohai666@gmail.com",
+  "root":  "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn",
+  "host":  "tjzj-inf-sci-k8s-bzz2-00022.tjzj.baidu.com",
+  "executable":  "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/.venv/bin/python",
+  "cpu_count":  96,
+  "cpu_count_logical":  192,
+  "gpu":  "CF-NG-BZZ2-O",
+  "gpu_count":  8,
+  "disk":  {
+    "/":  {
+      "total":  "3779302981632",
+      "used":  "1762174697472"
+    }
+  },
+  "memory":  {
+    "total":  "3242055487488"
+  },
+  "gpu_nvidia":  [
+    {
+      "name":  "CF-NG-BZZ2-O",
+      "memoryTotal":  "192265846784",
+      "cudaCores":  18944,
+      "architecture":  "Blackwell",
+      "uuid":  "GPU-462d5db6-f4b3-a4c9-bdde-dd4c1176c630"
+    },
+    {
+      "name":  "CF-NG-BZZ2-O",
+      "memoryTotal":  "192265846784",
+      "cudaCores":  18944,
+      "architecture":  "Blackwell",
+      "uuid":  "GPU-752b2620-d32e-bf1f-6acb-ecd78c1b4d69"
+    },
+    {
+      "name":  "CF-NG-BZZ2-O",
+      "memoryTotal":  "192265846784",
+      "cudaCores":  18944,
+      "architecture":  "Blackwell",
+      "uuid":  "GPU-6f168b41-4b98-8dc5-1a43-95656b0072c4"
+    },
+    {
+      "name":  "CF-NG-BZZ2-O",
+      "memoryTotal":  "192265846784",
+      "cudaCores":  18944,
+      "architecture":  "Blackwell",
+      "uuid":  "GPU-7dd2f109-9804-04b0-07b4-a0721f08e001"
+    },
+    {
+      "name":  "CF-NG-BZZ2-O",
+      "memoryTotal":  "192265846784",
+      "cudaCores":  18944,
+      "architecture":  "Blackwell",
+      "uuid":  "GPU-e633bb44-882a-bbd4-d600-7dbb798288eb"
+    },
+    {
+      "name":  "CF-NG-BZZ2-O",
+      "memoryTotal":  "192265846784",
+      "cudaCores":  18944,
+      "architecture":  "Blackwell",
+      "uuid":  "GPU-10457b7d-eae4-74e4-4e3b-7da3a8ea64b0"
+    },
+    {
+      "name":  "CF-NG-BZZ2-O",
+      "memoryTotal":  "192265846784",
+      "cudaCores":  18944,
+      "architecture":  "Blackwell",
+      "uuid":  "GPU-7a4aa134-25ac-6744-984b-c39be78e2c25"
+    },
+    {
+      "name":  "CF-NG-BZZ2-O",
+      "memoryTotal":  "192265846784",
+      "cudaCores":  18944,
+      "architecture":  "Blackwell",
+      "uuid":  "GPU-f5ee4a49-7bff-d510-3a16-274c401ca256"
+    }
+  ],
+  "cudaVersion":  "13.0",
+  "writerId":  "ksa8m53qb16enraudja6dalbvl3jvoci"
+}

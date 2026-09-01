@@ -1,0 +1,19 @@
+2026-09-01 17:25:09,729 INFO    MainThread:1123874 [wandb_setup.py:_flush():81] Current SDK version is 0.29.0
+2026-09-01 17:25:09,729 INFO    MainThread:1123874 [wandb_setup.py:_flush():81] Configure stats pid to 1123874
+2026-09-01 17:25:09,729 INFO    MainThread:1123874 [wandb_setup.py:_flush():81] Loading settings from environment variables
+2026-09-01 17:25:09,729 INFO    MainThread:1123874 [wandb_init.py:setup_run_log_directory():739] Logging user logs to /root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/wandb/run-20260901_172509-f3gk0j4f/logs/debug.log
+2026-09-01 17:25:09,729 INFO    MainThread:1123874 [wandb_init.py:setup_run_log_directory():740] Logging internal logs to /root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/wandb/run-20260901_172509-f3gk0j4f/logs/debug-internal.log
+2026-09-01 17:25:09,729 INFO    MainThread:1123874 [wandb_init.py:init():783] calling init triggers
+2026-09-01 17:25:09,729 INFO    MainThread:1123874 [wandb_init.py:init():788] wandb.init called with sweep_config: {}
+config: {'model_name': '/root/paddlejob/share-storage/gpfs/system-public/yudaohai/data/Llama-3.1-8B-Instruct', 'config_name': None, 'dataset_name': 'datasets/PaulGrahamEssays.jsonl', 'dataset_format': 'multiple_passkey', 'split': 'train', 'lr': 0.01, 'num_steps': 2000, 'batch_size': 1, 'max_length': 128000, 'context_length_min': 8000, 'context_length_max': 128000, 'context_lengths_num_intervals': 50, 'depth_ratio_num_intervals': 1000, 'num_passkeys': 10, 'output_dir': 'attn_patterns/reuse_v1//root/paddlejob/share-storage/gpfs/system-public/yudaohai/data/Llama-3.1-8B-Instruct/hc-orig-rw=0.002-init=0.0-sp=0.8-tp=0.7-lr=0.01-ctx=8000_128000-multi_passkey10-sp8', 'sink_size': 64, 'recent_size': 256, 'deploy_sink_size': None, 'deploy_recent_size': None, 'reg_weight': 0.002, 'reg_mode': 'hc', 'desired_density': 0.08333, 'lagrange_lr': 0.001, 'lamda_init_value': 2.0, 'initial_value': 0.0, 'target_sparsity': 0.8, 'uniform_sparsity': False, 'select_mode': 'topp', 'top_p': 0.7, 'min_blocks': 8, 'max_blocks': 64, 'exp_name': None, 'enable_pp': False, 'enable_tp': False, 'disable_wandb': False, 'min_needle_depth_ratio': 0.05, 'max_needle_depth_ratio': 0.95, 'save_steps': 50, 'gradient_accumulation_steps': 1, 'resume': False, 'sp_size': 8, 'two_pass': True, 'ac_group_size': 1, 'no_ac': True, 'rope_theta': None, 'device': 'cuda:0', 'streaming_attn_implementation': 'blocksparse', 'supervision': 'distill', 'n_samples': None, 'task': 'default', 'attn_load_dir': None, 'threshold': 0.5, 'sparsity': None, 'passkey_length': 32, 'context_length': 16384, 'generation_length': 256, 'stride_length': 256, 'prefilling_chunk_size': 4096, 'seed': 42, '_wandb': {}}
+2026-09-01 17:25:09,729 INFO    MainThread:1123874 [wandb_init.py:init():831] starting backend
+2026-09-01 17:25:09,729 INFO    MainThread:1123874 [wandb_init.py:init():846] sending inform_init request
+2026-09-01 17:25:10,597 INFO    MainThread:1123874 [wandb_init.py:init():851] backend started and connected
+2026-09-01 17:25:10,599 INFO    MainThread:1123874 [wandb_init.py:init():921] updated telemetry
+2026-09-01 17:25:10,609 INFO    MainThread:1123874 [wandb_init.py:init():944] communicating run to backend with 90.0 second timeout
+2026-09-01 17:25:12,797 INFO    MainThread:1123874 [wandb_init.py:init():981] starting run threads in backend
+2026-09-01 17:25:12,853 INFO    MainThread:1123874 [wandb_run.py:_console_start():2545] atexit reg
+2026-09-01 17:25:12,853 INFO    MainThread:1123874 [wandb_run.py:_redirect():2395] redirect: wrap_raw
+2026-09-01 17:25:12,853 INFO    MainThread:1123874 [wandb_run.py:_redirect():2464] Wrapping output streams.
+2026-09-01 17:25:12,853 INFO    MainThread:1123874 [wandb_run.py:_redirect():2487] Redirects installed.
+2026-09-01 17:25:12,855 INFO    MainThread:1123874 [wandb_init.py:init():1019] run started, returning control to user process

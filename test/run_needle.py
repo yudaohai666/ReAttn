@@ -213,6 +213,7 @@ def build_patch_kwargs(args) -> dict:
             top_p=args.top_p,
             min_blocks=args.min_blocks,
             max_blocks=args.max_blocks,
+            last_q_full=args.last_q_full,
         )
     if m == "meanpooling":
         return dict(
@@ -327,6 +328,9 @@ def main() -> None:
     parser.add_argument("--max-blocks", type=int, default=64,
                         help="reuse_v1 topp max selected blocks per q-block (incl. sink+local; "
                              "None -> kernel headroom max_sel)")
+    parser.add_argument("--last-q-full", action="store_true",
+                        help="reuse_v1: last query block of sparse kv-heads attends densely "
+                             "to the full KV cache (better retrieval recall)")
     # duo (DuoAttention: retrieval heads dense + streaming heads sink+local)
     parser.add_argument("--attn-load-dir", default=DEFAULT_DUO_LABEL_DIR,
                         help="duo: dir with full_attention_heads.tsv (+ config.json)")

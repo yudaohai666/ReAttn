@@ -983,8 +983,14 @@ def _select_blocks_topp(
     k_cnt = unique_mask.sum(-1).clamp_(max=max_sel).to(torch.int32).contiguous()
 
     # Pack into (b, nqb, max_sel) int32, padding with sentinel nkb.
-    # Replace non-unique/invalid positions with nkb, then slice [:max_sel].
+    # Replace non-unique/invalid positions with nkb, then COMPACT: the second sort
+    # pushes every sentinel to the tail (valid values are distinct and < nkb), so
+    # the surviving indices occupy exactly slots [0, k_cnt) in ascending order.
+    # Without it the in-place sentinels leave holes among the valid entries and the
+    # kernel's ``i < cnt`` loop stops early, dropping the highest-index selected
+    # block -- which after the ascending sort is the diagonal (local) block.
     packed = torch.where(unique_mask, sorted_idx, torch.full_like(sorted_idx, nkb))
+    packed, _ = packed.sort(dim=-1)
     k_sel  = packed[..., :max_sel].to(torch.int32).contiguous()
     return k_sel, k_cnt
 
@@ -1007,7 +1013,6 @@ def reuse_v1_layer_per_hkv(
     min_blocks: int = 8,
     max_blocks: int = 64,
     topk_ratio: float = None,    # if set (topk mode only): budget = ceil(kv_len//block_size * topk_ratio) + sink_blocks + local_blocks
-    streaming_fallback: bool = False,   # kept for API compat, ignored
     last_q_full: bool = False,
 ) -> torch.Tensor:
     """Per-layer prefill forward with per-kv-head anchor/sparse dispatch.
@@ -1015,7 +1020,10 @@ def reuse_v1_layer_per_hkv(
     Anchor kv-heads run full block-sparse attention (dense) and emit block scores
     that are written into ``cache``.  Sparse kv-heads read their own cache slot
     (the most recently written anchor selection for that kv-head) and run the
-    indexed sparse kernel over only those blocks.
+    indexed sparse kernel over only those blocks. Layer 0 must be all-anchor
+    (enforced by ``ReuseV1Holder.load_label``) so every slot is written before
+    any sparse head reads it -- there is no fallback for an empty slot; the
+    indexed kernel returns exactly zero output when ``cnt == 0``.
 
     ``last_q_full=True``: the last query block of sparse heads attends densely to
     the full KV sequence (improves retrieval recall on NIAH / passkey tasks).
@@ -1149,6 +1157,210 @@ def reuse_v1_layer_per_hkv(
             )
             out_grouped[:, hkv] = out_h
 
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Per-kv-head training API.
+#
+# Consumed by reuse_v1/patch/reuse_train_llama.py (the two-way distillation
+# trainer) and by Reuse_v1_bwd.py. These add NO new numerics: each one is either a
+# score-free variant of the dense kernel above, or folds / loops the Hkv dimension
+# and delegates to the same helpers ``reuse_v1_layer_per_hkv`` uses, so a
+# per-kv-head slice here is element-identical to that path's per-hkv loop.
+# --------------------------------------------------------------------------- #
+
+# Budgets accepted by ``Reuse_v1_bwd.sparse_block_attn_trainable_from_cache``.
+# Only the KEYS are load-bearing: that function validates ``budget`` against this
+# table and then takes the real width from ``k_sel.shape[-1]``. The values are the
+# ``topk``-mode selection width, for reference.
+_MAX_SEL_TABLE = {
+    _b: _b + 3          # budget + sink_blocks(1) + local_blocks(2)
+    for _b in (8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024)
+}
+
+
+def _max_sel_for_budget(budget, nkb, select_mode='topk', max_blocks=None,
+                        sink_blocks=1, local_blocks=2):
+    """Selection width (kernel constexpr ``MAX_SEL``) for a budget.
+
+    Thin wrapper over ``_resolve_max_sel`` for callers that only know
+    ``(budget, nkb)``: with the defaults this is ``min(budget + 3, nkb)``, i.e.
+    ``topk`` mode with the trainer's fixed ``sink_blocks=1 / local_blocks=2``.
+
+    NOTE for ``select_mode='topp'``: the width there is ``min(max_blocks + 2,
+    nkb)`` and is INDEPENDENT of ``budget``, so a 2-arg call does not describe a
+    topp selection -- pass ``select_mode`` / ``max_blocks`` explicitly.
+    """
+    return _resolve_max_sel(select_mode, budget, max_blocks, nkb,
+                            sink_blocks=sink_blocks, local_blocks=local_blocks)
+
+
+def _compact_block_mask_per_hkv(block_mask: torch.Tensor, max_sel: int):
+    """Per-kv-head variant of ``_compact_block_mask``.
+
+    ``block_mask``: (b, Hkv, nqb, nkb) bool, one selection per kv head.
+    Returns ``(k_sel int32 (b, nqb, Hkv, max_sel), k_cnt int32 (b, nqb, Hkv))`` --
+    the layout the indexed kernels want (q-block major, Hkv inner, ``max_sel``
+    stride-1), i.e. exactly what
+    ``Reuse_v1_bwd.sparse_block_attn_trainable_from_cache`` consumes.
+
+    Folding Hkv into the batch dim makes this element-identical to calling
+    ``_compact_block_mask`` once per kv head.
+    """
+    b, Hkv, nqb, nkb = block_mask.shape
+    k_sel, k_cnt = _compact_block_mask(
+        block_mask.reshape(b * Hkv, nqb, nkb).contiguous(), max_sel)
+    k_sel = k_sel.view(b, Hkv, nqb, -1).permute(0, 2, 1, 3).contiguous()
+    k_cnt = k_cnt.view(b, Hkv, nqb).permute(0, 2, 1).contiguous()
+    return k_sel, k_cnt
+
+
+def select_topk_blocks_per_kv_head(
+    block_score: torch.Tensor,   # (batch, H, nqb, nkb) fp32, full-head scores
+    G: int,                      # q heads per kv head (H // Hkv)
+    budget: int = 32,
+    sink_blocks: int = 1,
+    local_blocks: int = 2,
+    causal: bool = True,
+    select_mode: str = 'topk',
+    top_p: float = 0.9,
+    min_blocks: int = 8,
+    max_blocks: int = 64,
+):
+    """Per-kv-head block selection: aggregate the G q-heads of each kv head, then
+    select k-blocks independently per kv head.
+
+    Returns ``(k_sel int32 (b, Hkv, nqb, max_sel), k_cnt int32 (b, Hkv, nqb))``
+    -- anchor-cache layout. Transpose dims 1/2 to feed the indexed kernels.
+
+    Head layout assumption: ``repeat_interleave``, i.e. the G q-heads of kv head h
+    are ``block_score[:, h*G:(h+1)*G]`` (contiguous). Aggregation is ``amax`` over
+    G, matching ``reuse_v1_layer_per_hkv``'s per-hkv path.
+    """
+    b, H, nqb, nkb = block_score.shape
+    if G <= 0 or H % G != 0:
+        raise ValueError(f"H={H} is not divisible by G={G}")
+    Hkv = H // G
+    dev = block_score.device
+
+    # Fold Hkv into batch so one call handles every kv head: (b*Hkv, G, nqb, nkb).
+    bs_flat = block_score.reshape(b * Hkv, G, nqb, nkb)
+
+    if select_mode == 'topk':
+        max_sel = _resolve_max_sel('topk', budget, max_blocks, nqb,
+                                   sink_blocks=sink_blocks, local_blocks=local_blocks)
+        mask = select_topk_blocks(bs_flat, budget=budget, causal=causal,
+                                  force_first=(sink_blocks > 0), agg='max',
+                                  topk_ratio=None, sink_blocks=sink_blocks,
+                                  local_blocks=local_blocks)
+        k_sel, k_cnt = _compact_block_mask(mask, max_sel)
+    elif select_mode == 'topp':
+        max_sel = _resolve_max_sel('topp', budget, max_blocks, nqb,
+                                   sink_blocks=sink_blocks, local_blocks=local_blocks)
+        k_sel, k_cnt = _select_blocks_topp(
+            bs_flat.amax(dim=1), top_p=top_p, min_blocks=min_blocks,
+            max_blocks=max_blocks, max_sel=max_sel, causal=causal,
+            nkb=nkb, nqb=nqb, dev=dev)
+    else:
+        raise ValueError(f"unknown select_mode={select_mode!r}")
+
+    return (k_sel.view(b, Hkv, nqb, k_sel.shape[-1]).contiguous(),
+            k_cnt.view(b, Hkv, nqb).contiguous())
+
+
+def _sparse_block_attn_per_hkv(
+    q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,   # (b,H,s,d) / (b,Hkv,s,d)
+    k_sel: torch.Tensor,     # (b, nqb, Hkv, max_sel) int32
+    k_cnt: torch.Tensor,     # (b, nqb, Hkv) int32
+    budget: int,
+    block_size: int = 128,
+    causal: bool = True,
+    softmax_scale: float = None,
+) -> torch.Tensor:
+    """Forward-only per-kv-head sparse attention (the reference for
+    ``Reuse_v1_bwd.sparse_block_attn_trainable_from_cache``).
+
+    Loops kv heads and delegates each to ``_sparse_block_attn`` with that head's
+    own compacted index list, writing straight into the output slice.
+    """
+    b, H, s, d = q.shape
+    Hkv = k.shape[1]
+    G = H // Hkv
+    if softmax_scale is None:
+        softmax_scale = 1.0 / math.sqrt(d)
+    out = torch.empty_like(q)
+    for hkv in range(Hkv):
+        _sparse_block_attn(
+            q[:, hkv * G:(hkv + 1) * G].contiguous(),
+            k[:, hkv:hkv + 1].contiguous(),
+            v[:, hkv:hkv + 1].contiguous(),
+            None, budget,
+            block_size=block_size, causal=causal, softmax_scale=softmax_scale,
+            k_sel=k_sel[:, :, hkv, :].contiguous(),
+            k_cnt=k_cnt[:, :, hkv].contiguous(),
+            out=out[:, hkv * G:(hkv + 1) * G],
+        )
+    return out
+
+
+def block_sparse_attn_dense_no_score(
+    q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,   # (batch, H, seq, dim)
+    block_size: int = 128,
+    segment_size: int = 2048,
+    causal: bool = True,
+    softmax_scale: float = None,
+) -> torch.Tensor:
+    """Dense attention through the same kernel as ``block_sparse_attn_with_score``
+    but with ``EMIT_SCORE=False``: identical output, no block scores.
+
+    Use this when only the dense output is needed (teacher forward / dense branch
+    of the gate blend). It skips the fp32 ``mass`` scratch, which is
+    ``(b, H, s, nkb)`` and dominates memory at long context.
+
+    Returns ``out`` (batch, H, seq, dim), bit-identical to the first return value
+    of ``block_sparse_attn_with_score`` with an all-select mask.
+    """
+    b, H, s, d = q.shape
+    Hkv = k.shape[1]
+    num_kv_groups = H // Hkv
+    if softmax_scale is None:
+        softmax_scale = 1.0 / math.sqrt(d)
+    num_q_blocks = (s + block_size - 1) // block_size
+    num_k_blocks = num_q_blocks
+
+    out = torch.empty_like(q)
+
+    # The kernel indexes the mask's LAST dim with a raw element offset, so that dim
+    # must be stride-1; the leading dims go through the strides passed below, so a
+    # stride-0 broadcast view is safe there and costs only num_k_blocks bytes.
+    full_bm = torch.ones(num_k_blocks, dtype=torch.bool, device=q.device).expand(
+        b, H, num_q_blocks, num_k_blocks)
+    # Mass / LSE2 are never dereferenced when EMIT_SCORE=False (all uses are inside
+    # ``if EMIT_SCORE:``), but a real tensor is still needed to build the pointer.
+    dummy = torch.empty(1, dtype=torch.float32, device=q.device)
+
+    def grid(META):
+        return (triton.cdiv(s, META["BLOCK_M"]), H, b)
+
+    _block_sparse_score_fwd[grid](
+        q, k, v, out, full_bm,
+        dummy, dummy,
+        q.stride(0), q.stride(1), q.stride(2), q.stride(3),
+        k.stride(0), k.stride(1), k.stride(2), k.stride(3),
+        v.stride(0), v.stride(1), v.stride(2), v.stride(3),
+        out.stride(0), out.stride(1), out.stride(2), out.stride(3),
+        full_bm.stride(0), full_bm.stride(1), full_bm.stride(2), full_bm.stride(3),
+        0, 0, 0, 0,          # mass strides   (unused)
+        0, 0, 0,             # lse2 strides   (unused)
+        s, s, softmax_scale,
+        0,                   # q_row_offset: single full-length launch
+        H, d, block_size, segment_size, num_kv_groups,
+        H=H, num_kv_groups=num_kv_groups, HEAD_DIM=d,
+        SEGMENT_SIZE=segment_size, LOGICAL_BLOCK_SIZE=block_size,
+        STAGE=3 if causal else 1,
+        EMIT_SCORE=False,
+    )
     return out
 
 

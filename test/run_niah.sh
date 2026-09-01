@@ -41,6 +41,9 @@ BUDGET="${BUDGET:-32}"; BLOCK_SIZE="${BLOCK_SIZE:-128}"; SEGMENT_SIZE="${SEGMENT
 # (MIN/MAX_BLOCKS are inclusive of sink+local; MAX_BLOCKS empty -> kernel headroom).
 SELECT_MODE="${SELECT_MODE:-topk}"; TOP_P="${TOP_P:-0.9}"
 MIN_BLOCKS="${MIN_BLOCKS:-8}"; MAX_BLOCKS="${MAX_BLOCKS:-64}"
+# LAST_Q_FULL=1: sparse kv-heads' last query block attends densely to full KV
+# (matches the RULER / LongBench eval default).
+LAST_Q_FULL="${LAST_Q_FULL:-0}"
 # duo (DuoAttention): retrieval heads dense flash_attn + streaming heads sink+local.
 DUO_LABEL_DIR="${DUO_LABEL_DIR:-${REPO_ROOT}/ckp/duo/Llama-3.1-8B-Instruct}"
 SINK_SIZE="${SINK_SIZE:-128}"; RECENT_SIZE="${RECENT_SIZE:-256}"; SPARSITY="${SPARSITY:-0.5}"
@@ -62,7 +65,8 @@ case "${METHOD}" in
           --block-size "${BLOCK_SIZE}" --segment-size "${SEGMENT_SIZE}" \
           --sink-blocks "${SINK_BLOCKS}" --local-blocks "${LOCAL_BLOCKS}" \
           --select-mode "${SELECT_MODE}" --top-p "${TOP_P}" --min-blocks "${MIN_BLOCKS}")
-    [ -n "${MAX_BLOCKS}" ] && ARGS+=(--max-blocks "${MAX_BLOCKS}") ;;
+    [ -n "${MAX_BLOCKS}" ] && ARGS+=(--max-blocks "${MAX_BLOCKS}")
+    [ "${LAST_Q_FULL}" = "1" ] && ARGS+=(--last-q-full) ;;
   *) ARGS=() ;;
 esac
 

@@ -67,19 +67,10 @@ from sp_ulysses import SPContext, seq_to_head, head_to_seq
 # AVERAGE), matching the distill ``* world_size`` recipe; and so activation-
 # checkpoint recompute deterministically reproduces the same z.
 from kuma_gate import hardkuma_sample_z, KUMA_SUPPORT
-# DDP (deterministic differentiable pruning) gate: the training-forward blend
-# gate is a straight-through clamp of the anchor_heads LOGIT (z_loga). The raw
-# logit is left unbounded above (only floored per-step in the trainer); the STE
-# lets the blend see a [0,1] value while the gradient flows to the raw logit.
-from ddp_gate import ste_clamp
 # Hard Concrete gate (opt-in --reg_mode hc). The reparam z is recomputed INSIDE
 # each layer forward from a FROZEN per-step uniform noise (holder.hc_noise) and
 # the trainable log_alpha stored in anchor_heads. Same FSDP/AC protocol as kuma.
 from hc_gate import hc_sample_z
-# HardLogistic(mu, s) gate (opt-in --reg_mode hln). HC with learnable global
-# temperature s replacing the fixed beta. Noise is frozen Uniform (same as HC).
-# density = sigmoid(mu), s-free; export threshold mu > 0.
-from hln_gate import hl_sample_z, hl_s_from_raw, NOISE_EPS as HL_NOISE_EPS
 
 class ReuseV1TrainHolder:
     """Per-model training state that threads the top-k selection across layers.
@@ -110,10 +101,6 @@ class ReuseV1TrainHolder:
         self.min_blocks = min_blocks
         self.max_blocks = max_blocks
         self.sels = {}
-        # hc_force_layer0: when True, reverts hc/hcl to the old design where
-        # layer 0 is always forced all-anchor (dense-only, gate frozen at 1).
-        # Set to False (default) for the new streaming-fallback design.
-        self.hc_force_layer0 = False
         # Forward mode set by the train loop; defaults to single-pass behavior:
         #   "single"       one-pass, grad in the same b=2 forward.
         #   "fill"         legacy b=2 [teacher|student] no_grad fill (kept for the
@@ -138,17 +125,8 @@ class ReuseV1TrainHolder:
         # ``kuma_noise[L]`` so the SAME u reproduces z under AC recompute and
         # across the fill/use passes. None until the train loop populates it.
         self.kuma_noise = None
-        # stg mode only: frozen per-step Gaussian noise, shape (num_layers, Hkv),
-        # drawn ONCE at the top of each train step (same pattern as kuma_noise).
-        # Read inside each layer's blend as ``stg_noise[L]``.
-        self.stg_noise = None
-        # hln mode only: frozen per-step Uniform noise, shape (num_layers, Hkv),
-        # drawn ONCE at the top of each train step (same pattern as kuma_noise).
-        # HardLogistic(mu, s) uses logistic noise (uniform -> logit), same as HC.
-        self.hln_noise = None
-        # hc / hcl mode only: frozen per-step Uniform noise, shape (num_layers, Hkv),
-        # drawn ONCE per step outside all forward/AC regions (same pattern as kuma/hln).
-        # hcl shares the same noise + sampling as hc; only the Lagrangian density differs.
+        # hc mode only: frozen per-step Uniform noise, shape (num_layers, Hkv),
+        # drawn ONCE per step outside all forward/AC regions (same pattern as kuma).
         self.hc_noise = None
         # Ulysses sequence parallelism. sp.sp_size==1 -> disabled (the entire SP
         # code path in the attention forward is gated on sp.sp_size>1, so the
@@ -158,13 +136,11 @@ class ReuseV1TrainHolder:
 
     def reset(self):
         self.sels = {}
-        # kuma / hc / hcl mode: per-kv-head anchor cache, mirrors inference
+        # kuma / hc mode: per-kv-head anchor cache, mirrors inference
         # IndexCache semantics. anchor_cache[h] = (k_sel, k_cnt) from the most
         # recent layer where kv-head h was sampled as anchor (z > 0.5). Populated
-        # during fill_student, read during use pass.
-        # With the streaming-fallback design, anchor_cache[h] may be absent for
-        # heads that have not yet had an anchor layer; those heads use streaming
-        # (sink + local) as the cheap branch instead of reuse.
+        # during fill_student, read during use pass. Layer 0 is forced all-anchor
+        # and writes every kv-head, so every slot is populated before layer 1.
         self.anchor_cache = {}
 
 
@@ -178,56 +154,44 @@ def _project_qkv(self, hidden, H, Hkv, hd, cos, sin):
     return q.contiguous(), k.contiguous(), v.contiguous()
 
 
-def _make_streaming_sel(b, Hkv, nqb, nkb, sink_blocks, local_blocks, budget, causal, device):
-    """Build a fixed sink+local block selection in the same format as anchor_cache.
+def _all_select_mask(q, H, block_size):
+    """All-True block mask for the dense/score kernel: (b, H, nqb, nkb) bool.
 
-    Returns ``(k_sel, k_cnt)`` with shapes ``(b, Hkv, nqb, max_sel)`` int32 and
-    ``(b, Hkv, nqb)`` int32, identical to what ``select_topk_blocks_per_kv_head``
-    produces but without any score (fixed pattern: sink + local window only).
-    Used as the streaming fallback when anchor_cache[h] has not been written yet.
+    The kernel indexes the mask's LAST dim with a raw element offset, so that dim
+    must be stride-1; the leading dims go through the strides passed to the kernel,
+    so a stride-0 broadcast view is correct there. Total footprint = nkb bytes.
     """
-    from Reuse_v1 import _max_sel_for_budget
-    off = nkb - nqb  # causal offset (0 for non-causal)
-    ar_q = torch.arange(nqb, device=device)
-    diag_k = (ar_q + off).clamp(max=nkb - 1)
-
-    # Build per-query-block mask: sink blocks + local window
-    mask = torch.zeros(nqb, nkb, dtype=torch.bool, device=device)
-    if sink_blocks > 0:
-        mask[:, :sink_blocks] = True
-    mask[ar_q, diag_k] = True  # diagonal (current) block
-    for j in range(1, local_blocks):
-        mask[ar_q, (diag_k - j).clamp(min=0)] = True
-    if causal:
-        layout = torch.arange(nkb, device=device)[None, :] <= (ar_q + off)[:, None]
-        mask &= layout
-
-    max_sel = _max_sel_for_budget(budget, nkb)
-    k_cnt = mask.sum(-1).clamp_(max=max_sel).to(torch.int32)  # (nqb,)
-    idx = torch.arange(nkb, device=device).unsqueeze(0).expand(nqb, -1)
-    masked = torch.where(mask, idx, torch.full_like(idx, nkb))
-    k_sel = masked.topk(max_sel, dim=-1, largest=False, sorted=True).values.to(torch.int32)  # (nqb, max_sel)
-
-    # Expand to (b, Hkv, nqb, max_sel) and (b, Hkv, nqb)
-    k_sel = k_sel.unsqueeze(0).unsqueeze(0).expand(b, Hkv, -1, -1).contiguous()
-    k_cnt = k_cnt.unsqueeze(0).unsqueeze(0).expand(b, Hkv, -1).contiguous()
-    return k_sel, k_cnt
+    b, _, s, _ = q.shape
+    nqb = (s + block_size - 1) // block_size
+    return torch.ones(nqb, dtype=torch.bool, device=q.device).expand(b, H, nqb, nqb)
 
 
 def _layer0_force_dense(holder):
-    """Return True if layer 0 should be forced all-dense (no blend/streaming).
+    """Layer 0 is always all-anchor (all modes): forced all-dense, no blend.
 
-    - Non-hc modes (l1/ddp/stg/hln): always True (layer 0 locked all-anchor,
-      legacy behaviour unchanged).
-    - kuma mode: also always True (kuma uses anchor_cache but layer 0 was
-      never freed in the original design).
-    - hc/hcl mode: True only when ``holder.hc_force_layer0`` is set (revert
-      to old design); False otherwise (new streaming-fallback design).
+    Its gate is frozen at anchor in ``enable_llama_reuse_v1_training`` and it is
+    excluded from the sparsity penalty, so every kv-head is guaranteed an anchor
+    write at layer 0. That is what lets every later sparse layer read a valid
+    ``anchor_cache`` / inference ``IndexCache`` slot -- there is no such thing as
+    a kv-head without a preceding anchor, hence no streaming fallback.
     """
-    if holder.reg_mode in ("hc", "hcl"):
-        return holder.hc_force_layer0
-    # All other modes: layer 0 stays all-dense.
     return True
+
+
+def _write_anchor_cache(holder, sel, h_offset=0):
+    """Record ``sel`` as the anchor selection for every kv-head it covers.
+
+    Used by the layer-0 forced-dense branches: layer 0 is all-anchor, so all of
+    its kv-heads write their selection, mirroring inference where layer 0 fills
+    every ``IndexCache`` slot. ``h_offset`` is the global index of the first
+    kv-head in ``sel`` (nonzero under Ulysses SP, where ``sel`` is a local slice).
+    """
+    if holder.reg_mode not in ("kuma", "hc"):
+        return
+    k_sel_l, k_cnt_l = sel
+    for h_local in range(k_sel_l.shape[1]):
+        holder.anchor_cache[h_offset + h_local] = (
+            k_sel_l[:, h_local:h_local + 1], k_cnt_l[:, h_local:h_local + 1])
 
 
 def _teacher_dense(self, teacher_hidden, H, Hkv, hd, cos, sin, holder, hidden_size):
@@ -256,10 +220,9 @@ def _student_dense_and_select(self, student_hidden, H, Hkv, hd, G, cos, sin, hol
     anchor-branch value used in the blend; the selection feeds the NEXT layer's
     sparse branch.
     """
-    bsz = student_hidden.size(0)
     with torch.no_grad():
         qs, ks, vs = _project_qkv(self, student_hidden, H, Hkv, hd, cos, sin)
-        full_bm = torch.empty((bsz, H, 1, 1), dtype=torch.bool, device=qs.device)
+        full_bm = _all_select_mask(qs, H, holder.block_size)
         out_dense_h, block_score = block_sparse_attn_with_score(
             qs, ks, vs, full_bm,
             block_size=holder.block_size, segment_size=holder.segment_size,
@@ -318,56 +281,17 @@ def _kv_head_gate(self, holder, lo=None, hi=None):
         if lo is not None:
             a, b, u = a[lo:hi], b[lo:hi], u[lo:hi]
         return hardkuma_sample_z(u, a, b, KUMA_SUPPORT)
-    if holder.reg_mode == "ddp":
-        # DDP: anchor_heads IS the logit z_loga; the blend gate is a
-        # straight-through clamp to [0,1] (forward value clamped, gradient
-        # passes to the raw logit, which is left free to exceed 1). Consumed
-        # inside the FSDP-hooked forward exactly like the l1/kuma gates, so the
-        # per-layer reduce-scatter AVERAGE + distill ``* world_size`` recipe is
-        # unchanged. Layer 0 never blends (all-anchor), so no special-casing.
-        z = self.anchor_heads
-        if lo is not None:
-            z = z[lo:hi]
-        return ste_clamp(z, 0.0, 1.0)
-    if holder.reg_mode == "stg":
-        # STG: anchor_heads is mu_code; blend gate = clip(mu + 0.5 + sigma*eps).
-        # eps is frozen per-step noise from holder.stg_noise[L], same pattern as
-        # kuma. Recomputing inside the layer forward keeps mu gradient in the
-        # FSDP-hooked forward (reduce-scatter AVERAGE, compensated by * world_size).
-        L = self._reuse_layer_idx
-        mu = self.anchor_heads
-        eps = holder.stg_noise[L].to(mu.device)
-        sigma = getattr(holder, "stg_sigma", 0.5)
-        if lo is not None:
-            mu, eps = mu[lo:hi], eps[lo:hi]
-        return torch.clamp(mu + 0.5 + sigma * eps, 0.0, 1.0)
-    if holder.reg_mode in ("hc", "hcl"):
+    if holder.reg_mode == "hc":
         # Hard Concrete: anchor_heads is log_alpha; blend gate = hc_sample_z(u, log_alpha).
         # u is frozen per-step noise from holder.hc_noise[L], same protocol as kuma.
         # Recomputing inside the layer forward keeps log_alpha gradient in the
         # FSDP-hooked forward (reduce-scatter AVERAGE, compensated by * world_size).
-        # hcl uses the same HC gate sampling; only the Lagrangian density formula
-        # differs (sigmoid(alpha) = P(z>0.5) instead of sigmoid(alpha+1.599) = P(z>0)).
         L = self._reuse_layer_idx
         log_alpha = self.anchor_heads
         u = holder.hc_noise[L].to(log_alpha.device)
         if lo is not None:
             log_alpha, u = log_alpha[lo:hi], u[lo:hi]
         return hc_sample_z(u, log_alpha)
-    if holder.reg_mode == "hln":
-        # HardLogistic(mu, s): anchor_heads is mu; s is a global learnable
-        # temperature stored as holder.hl_s_raw (nn.Parameter, unconstrained).
-        # Blend gate = hl_sample_z(u, mu, s) recomputed inside layer forward
-        # from frozen per-step uniform noise holder.hln_noise[L], same protocol
-        # as hc_noise. Gradient flows to mu (and s via holder.hl_s_raw).
-        L = self._reuse_layer_idx
-        mu = self.anchor_heads
-        u = holder.hln_noise[L].to(mu.device)
-        s_raw = getattr(holder, "hl_s_raw", None)
-        s = hl_s_from_raw(s_raw.to(mu.device)) if s_raw is not None else 0.5
-        if lo is not None:
-            mu, u = mu[lo:hi], u[lo:hi]
-        return hl_sample_z(u, mu, s)
     g = self.anchor_heads.clamp(0, 1)
     if lo is not None:
         g = g[lo:hi]
@@ -377,14 +301,10 @@ def _kv_head_gate(self, holder, lo=None, hi=None):
 def _anchor_cache_sel(holder, Hkv, sel_fallback, L, lo=None, hi=None):
     """Return the per-kv-head selection to use for layer L's sparse blend.
 
-    hc mode (new streaming-fallback design):
-      - Heads with an entry in anchor_cache use the most-recent anchor write
-        (topk reuse), mirroring inference IndexCache semantics.
-      - Heads WITHOUT an entry (never been anchor yet) get a fixed streaming
-        selection (sink + local only), built on-the-fly via _make_streaming_sel.
-        This replaces the old hard constraint that layer 0 must be all-anchor.
-
-    kuma / hcl mode: same logic as hc (anchor_cache written by anchor heads).
+    hc / kuma mode: every kv-head reads the most-recent anchor write from
+    ``anchor_cache`` (topk reuse), mirroring inference ``IndexCache`` semantics.
+    Layer 0 is forced all-anchor and writes every kv-head, so from layer 1 on a
+    cache entry always exists; a missing entry is an internal bug.
 
     other modes: return sel_fallback unchanged (original sels[L-1] behaviour).
 
@@ -392,32 +312,18 @@ def _anchor_cache_sel(holder, Hkv, sel_fallback, L, lo=None, hi=None):
     [lo, hi) from anchor_cache. The SP blend helpers operate on local heads only,
     so the returned sel has shape (b, Hkv_local, nqb, max_sel).
     """
-    if holder.reg_mode not in ("kuma", "hc", "hcl"):
+    if holder.reg_mode not in ("kuma", "hc"):
         return sel_fallback
     h_start = lo if lo is not None else 0
     h_end   = hi if hi is not None else Hkv
 
-    # Determine shape from the fallback sel (always available as sels[L-1] or sels[0]).
-    k_sel_fb, k_cnt_fb = sel_fallback  # (b, Hkv_slice, nqb, max_sel) / (b, Hkv_slice, nqb)
-    b, _, nqb, max_sel = k_sel_fb.shape
-    # nkb == nqb for causal prefill (square attention map).
-    dev = k_sel_fb.device
-
     k_sel_list, k_cnt_list = [], []
     for h_global in range(h_start, h_end):
-        if h_global in holder.anchor_cache:
-            k_sel_list.append(holder.anchor_cache[h_global][0])  # (b, 1, nqb, max_sel)
-            k_cnt_list.append(holder.anchor_cache[h_global][1])  # (b, 1, nqb)
-        else:
-            # Streaming fallback: build sink+local fixed selection.
-            # nkb == nqb for causal prefill.
-            streaming_k_sel, streaming_k_cnt = _make_streaming_sel(
-                b, 1, nqb, nqb,
-                holder.sink_blocks, holder.local_blocks, holder.budget,
-                holder.causal, dev,
-            )
-            k_sel_list.append(streaming_k_sel)
-            k_cnt_list.append(streaming_k_cnt)
+        assert h_global in holder.anchor_cache, (
+            f"anchor_cache miss for kv-head {h_global} at layer {L}: layer 0 is "
+            "forced all-anchor and must have written every kv-head")
+        k_sel_list.append(holder.anchor_cache[h_global][0])  # (b, 1, nqb, max_sel)
+        k_cnt_list.append(holder.anchor_cache[h_global][1])  # (b, 1, nqb)
     return torch.cat(k_sel_list, dim=1), torch.cat(k_cnt_list, dim=1)
 
 
@@ -497,8 +403,7 @@ def _sp_student_dense_and_select(self, hidden, H, Hkv, hd, G, cos, sin, holder):
     H_local = H // holder.sp.sp_size
     with torch.no_grad():
         qf, kf, vf = _sp_project_a2a(self, hidden, H, Hkv, hd, cos, sin, group)
-        full_bm = torch.empty((bsz, H_local, 1, 1), dtype=torch.bool,
-                              device=qf.device)
+        full_bm = _all_select_mask(qf, H_local, holder.block_size)
         out_dense_h, block_score = block_sparse_attn_with_score(
             qf, kf, vf, full_bm, block_size=holder.block_size,
             segment_size=holder.segment_size, causal=holder.causal)
@@ -605,14 +510,13 @@ def llama_reuse_v1_forward_two_way(
         # input the use pass will see. Reset lives HERE (not in fill_teacher):
         # the student stream is the one that writes sels.
         #
-        # kuma / hc / hcl mode: also maintains holder.anchor_cache (per-kv-head
+        # kuma / hc mode: also maintains holder.anchor_cache (per-kv-head
         # IndexCache proxy). After computing this layer's sel = (k_sel, k_cnt),
         # we check the sampled gate z (from frozen holder.kuma_noise[L] for kuma,
-        # or holder.hc_noise[L] for hc/hcl) and update anchor_cache[h] only for
+        # or holder.hc_noise[L] for hc) and update anchor_cache[h] only for
         # heads where z[h] > 0.5 (anchor heads). Sparse heads (z[h] <= 0.5) leave
-        # their slot unchanged; if no anchor write has occurred yet for head h,
-        # anchor_cache[h] is absent and _anchor_cache_sel will use streaming
-        # (sink+local) as the cheap branch instead of reuse.
+        # their slot unchanged. Layer 0 is forced all-anchor and writes every
+        # kv-head, so every slot is populated before layer 1 reads it.
         bsz, q_len, _ = hidden_states.size()
         if L == 0:
             holder.reset()
@@ -625,6 +529,8 @@ def llama_reuse_v1_forward_two_way(
                 lo_s, hi_s = holder.sp.head_range(Hkv)
                 if L == 0 and _layer0_force_dense(holder):
                     student_out = _sp_finish(self, out_dense_h, bsz, hidden_size, group)
+                    # Layer 0 is all-anchor: every local kv-head writes its sel.
+                    _write_anchor_cache(holder, sel, h_offset=lo_s)
                 else:
                     sel_for_blend = _anchor_cache_sel(
                         holder, Hkv, holder.sels[L - 1] if L > 0 else sel,
@@ -635,7 +541,7 @@ def llama_reuse_v1_forward_two_way(
                     student_out = _sp_finish(self, blended, bsz, hidden_size, group)
                     # Update anchor_cache AFTER blend: anchor heads (z>0.5) write
                     # their fresh sel so subsequent layers can read it.
-                    if holder.reg_mode in ("kuma", "hc", "hcl"):
+                    if holder.reg_mode in ("kuma", "hc"):
                         z = _kv_head_gate(self, holder, lo_s, hi_s)  # (Hkv_local,)
                         k_sel_l, k_cnt_l = sel
                         for h_local in range(k_sel_l.shape[1]):
@@ -650,8 +556,10 @@ def llama_reuse_v1_forward_two_way(
             self, hidden_states, H, Hkv, hd, G, cos, sin, holder)
         holder.sels[L] = sel
         if L == 0 and _layer0_force_dense(holder):
-            # Forced all-dense: no blend, no anchor_cache update.
+            # Forced all-dense: no blend. Layer 0 is all-anchor, so every kv-head
+            # writes its fresh sel for the later layers to reuse.
             student_out = self.o_proj(out_dense_s.reshape(bsz, q_len, hidden_size))
+            _write_anchor_cache(holder, sel)
         else:
             with torch.no_grad():
                 sel_for_blend = _anchor_cache_sel(
@@ -659,7 +567,7 @@ def llama_reuse_v1_forward_two_way(
                 student_out = _student_sparse_blend(
                     self, hidden_states, out_dense_s, sel_for_blend,
                     H, Hkv, hd, G, cos, sin, holder, hidden_size)
-                if holder.reg_mode in ("kuma", "hc", "hcl"):
+                if holder.reg_mode in ("kuma", "hc"):
                     z = _kv_head_gate(self, holder)
                     k_sel_l, k_cnt_l = sel
                     for h in range(k_sel_l.shape[1]):
@@ -689,6 +597,7 @@ def llama_reuse_v1_forward_two_way(
         holder.sels[L] = sel
         if L == 0 and _layer0_force_dense(holder):
             student_out = self.o_proj(out_dense_s.reshape(bsz, q_len, hidden_size))
+            _write_anchor_cache(holder, sel)
         else:
             with torch.no_grad():
                 sel_for_blend = _anchor_cache_sel(
@@ -696,7 +605,7 @@ def llama_reuse_v1_forward_two_way(
                 student_out = _student_sparse_blend(
                     self, student_hidden, out_dense_s, sel_for_blend,
                     H, Hkv, hd, G, cos, sin, holder, hidden_size)
-                if holder.reg_mode in ("kuma", "hc", "hcl"):
+                if holder.reg_mode in ("kuma", "hc"):
                     z = _kv_head_gate(self, holder)
                     k_sel_l, k_cnt_l = sel
                     for h in range(k_sel_l.shape[1]):
@@ -710,7 +619,7 @@ def llama_reuse_v1_forward_two_way(
         # pass. NO reset, NO write -> the per-layer forward is a pure function of
         # its inputs, so it is recompute-safe under activation checkpointing.
         #
-        # kuma / hc / hcl mode: read from holder.anchor_cache (per-kv-head,
+        # kuma / hc mode: read from holder.anchor_cache (per-kv-head,
         # mirrors inference IndexCache) instead of holder.sels[L-1].
         # anchor_cache was populated by fill_student, so it is frozen here --
         # same AC-safe guarantee.
@@ -759,13 +668,14 @@ def llama_reuse_v1_forward_two_way(
     holder.sels[L] = sel
     if L == 0 and _layer0_force_dense(holder):
         student_out = self.o_proj(out_dense_s.reshape(bsz, q_len, hidden_size))
+        _write_anchor_cache(holder, sel)
     else:
         sel_for_blend = _anchor_cache_sel(
             holder, Hkv, holder.sels[L - 1] if L > 0 else sel, L)
         student_out = _student_sparse_blend(
             self, student_hidden, out_dense_s, sel_for_blend,
             H, Hkv, hd, G, cos, sin, holder, hidden_size)
-        if holder.reg_mode in ("kuma", "hc", "hcl"):
+        if holder.reg_mode in ("kuma", "hc"):
             z = _kv_head_gate(self, holder)
             k_sel_l, k_cnt_l = sel
             for h in range(k_sel_l.shape[1]):
@@ -790,7 +700,6 @@ def enable_llama_reuse_v1_training(
     top_p=0.9,
     min_blocks=8,
     max_blocks=64,
-    hc_force_layer0=False,
 ):
     """Install the two-way reuse_v1 training forward + per-kv-head gate.
 
@@ -809,19 +718,13 @@ def enable_llama_reuse_v1_training(
       deterministic ``anchor_heads`` gate is frozen (unused in the blend, kept
       only so the l1 code paths / export helpers stay uniform). Density is driven
       by a Lagrangian constraint in the train loop instead of L1.
-    * ``reg_mode="ddp"``: ``anchor_heads`` IS the learnable logit ``z_loga``; the
-      blend gate is a straight-through ``ste_clamp(z_loga, 0, 1)`` (see
-      ``_kv_head_gate``). No extra params are registered. The trainer noise-inits
-      the logit (layer >=1) and floors it per-step (no upper clamp); density is
-      driven by a 3-term learnable-lambda Lagrangian on the annealed
-      soft-saturation score instead of L1.
-    * ``reg_mode="hc"`` / ``"hcl"``: ``anchor_heads`` IS ``log_alpha``; the blend
-      gate is ``hc_sample_z(u, log_alpha)`` (Hard Concrete). Layer 0's gate is
-      trainable (NOT frozen) so the model can learn which layer is the first anchor
-      for each kv-head. Before any anchor write, _anchor_cache_sel returns a
-      streaming (sink+local) selection as the cheap branch fallback.
-    * Layer 0's gate is frozen at all-anchor only for non-hc modes (l1/kuma/ddp/stg/hln)
-      to preserve the existing reuse semantics for those modes."""
+    * ``reg_mode="hc"``: ``anchor_heads`` IS ``log_alpha``; the blend
+      gate is ``hc_sample_z(u, log_alpha)`` (Hard Concrete). Layer 0's
+      ``log_alpha`` is frozen at ``+10`` so ``hc_sample_z`` is identically 1.0 and
+      ``hc_p_nonzero`` is ~1.0, i.e. a deterministic anchor.
+    * Layer 0's gate is frozen at all-anchor in EVERY mode: it fills the anchor
+      cache for all kv-heads, which is what guarantees each later sparse head has
+      a valid selection to reuse."""
     device = next(model.parameters()).device
     dtype = next(model.parameters()).dtype
 
@@ -838,10 +741,6 @@ def enable_llama_reuse_v1_training(
         max_blocks=max_blocks,
     )
     holder.reg_mode = reg_mode
-    holder.hc_force_layer0 = hc_force_layer0  # revert switch for hc/hcl
-    holder.stg_sigma = 0.5  # default; overridden in train loop via args.stg_sigma
-    holder.hln_sigma = 0.5  # default; overridden in train loop (s value for logging)
-    holder.hl_s_raw  = None # set to nn.Parameter by train loop for hln mode
     model._reuse_holder = holder
 
     for idx, layer in enumerate(model.model.layers):
@@ -854,11 +753,12 @@ def enable_llama_reuse_v1_training(
         gate = nn.Parameter(
             torch.ones(Hkv, device=device, dtype=dtype) * initial_value
         )
-        if idx == 0 and (reg_mode not in ("hc", "hcl") or holder.hc_force_layer0):
-            # Non-hc modes, or hc with --hc_force_layer0: freeze layer 0 all-anchor.
-            gate.data.fill_(1.0)
+        if idx == 0:
+            # All modes: freeze layer 0 at all-anchor. For hc, anchor_heads is
+            # log_alpha, so the "always on" value is a large logit (+10 ->
+            # hc_sample_z == 1.0, hc_p_nonzero ~ 1.0), not 1.0.
+            gate.data.fill_(10.0 if reg_mode == "hc" else 1.0)
             gate.requires_grad_(False)
-        # hc/hcl without hc_force_layer0: layer 0 gate is trainable.
         module.register_parameter("anchor_heads", gate)
 
         if reg_mode == "kuma":

@@ -51,9 +51,6 @@ class ReuseV1Holder:
         # Filled in by get_reuse_v1_prefill.
         self.label = None            # (num_layers, Hkv) bool tensor on device
         self.num_layers = None
-        # False = new HC streaming-fallback design (layer 0 kv-heads may be sparse).
-        # True  = legacy/forced design (layer 0 guaranteed all-anchor).
-        self.layer0_forced_anchor = True
         # Mutable per-prompt state.
         self.cache = None
         self._bound = None           # (b, nqb, Hkv) the current cache is bound to
@@ -63,15 +60,13 @@ class ReuseV1Holder:
         self._bound = None
 
     @staticmethod
-    def load_label(path, device, layer0_forced_anchor=True):
+    def load_label(path, device):
         """Load an anchor/sparse label matrix (num_layers, Hkv) bool.
 
-        Values are thresholded at 0.5.
-
-        ``layer0_forced_anchor=True`` (default / legacy): enforces that layer 0
-        is all-anchor.  Set to False for the new HC streaming-fallback design
-        where layer 0 kv-heads may be sparse (handled by streaming attention at
-        inference time).  Read from ``reuse_v1_label_config.json`` when present.
+        Values are thresholded at 0.5. Layer 0 MUST be all-anchor: it is what
+        fills every ``IndexCache`` slot, so a sparse layer-0 kv-head would leave
+        later layers reading an empty selection (``cnt == 0``), for which the
+        kernel returns exactly zero attention output.
         """
         import torch
         x = torch.load(path, map_location='cpu')
@@ -80,8 +75,12 @@ class ReuseV1Holder:
         label = (x.float() > 0.5)
         if label.dim() != 2:
             raise ValueError(f"label must be 2-D (num_layers, Hkv), got shape {tuple(label.shape)}")
-        if layer0_forced_anchor and not bool(label[0].all()):
-            raise ValueError("layer 0 must be all-anchor (label[0].all() == True)")
+        if not bool(label[0].all()):
+            raise ValueError(
+                f"layer 0 must be all-anchor (label[0].all() == True), got "
+                f"{int(label[0].sum())}/{label.shape[1]} anchors in {path}. This "
+                "label was produced by the removed streaming-fallback design and "
+                "must be retrained.")
         return label.to(device).bool()
 
 
@@ -135,7 +134,6 @@ def reuse_v1_prefill(query_states, key_states, value_states,
         select_mode=holder.select_mode, top_p=holder.top_p,
         min_blocks=holder.min_blocks, max_blocks=holder.max_blocks,
         topk_ratio=holder.topk_ratio,
-        streaming_fallback=(not holder.layer0_forced_anchor),
         last_q_full=holder.last_q_full,
     )
 
@@ -168,15 +166,20 @@ def get_reuse_v1_prefill(label_path, budget=32, block_size=128, segment_size=204
     if select_mode not in ('topk', 'topp'):
         raise ValueError(f"select_mode must be 'topk' or 'topp', got {select_mode!r}")
 
-    # Read layer0_forced_anchor from the sidecar config if present.
+    # Sidecar sanity check: labels flagged layer0_forced_anchor=false come from
+    # the removed streaming-fallback design and are invalid at inference (the
+    # kernel has no fallback -- unwritten IndexCache slots yield zero output).
     import json
     label_dir = os.path.dirname(label_path)
     cfg_path = os.path.join(label_dir, "reuse_v1_label_config.json")
-    layer0_forced_anchor = True  # legacy default
     if os.path.isfile(cfg_path):
         with open(cfg_path) as _f:
             _cfg = json.load(_f)
-        layer0_forced_anchor = bool(_cfg.get("layer0_forced_anchor", True))
+        if not bool(_cfg.get("layer0_forced_anchor", True)):
+            raise ValueError(
+                f"{cfg_path} says layer0_forced_anchor=false: this label was "
+                "produced by the removed streaming-fallback design and must be "
+                "retrained with layer 0 forced all-anchor.")
 
     holder = ReuseV1Holder(
         budget=budget, block_size=block_size, segment_size=segment_size,
@@ -185,9 +188,7 @@ def get_reuse_v1_prefill(label_path, budget=32, block_size=128, segment_size=204
         topk_ratio=topk_ratio,
         last_q_full=last_q_full,
     )
-    holder.label = ReuseV1Holder.load_label(label_path, device,
-                                            layer0_forced_anchor=layer0_forced_anchor)
+    holder.label = ReuseV1Holder.load_label(label_path, device)
     holder.num_layers = holder.label.shape[0]
-    holder.layer0_forced_anchor = layer0_forced_anchor
 
     return functools.partial(reuse_v1_prefill, holder=holder)

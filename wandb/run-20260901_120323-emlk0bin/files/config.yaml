@@ -1,0 +1,269 @@
+_wandb:
+    value:
+        cli_version: 0.29.0
+        e:
+            q11wo4f1kpbazt0xigmxf4epym0tnpgl:
+                args:
+                    - --model_name
+                    - /root/paddlejob/share-storage/gpfs/system-public/yudaohai/data/Llama-3.1-8B-Instruct
+                    - --batch_size
+                    - "1"
+                    - --max_length
+                    - "128000"
+                    - --dataset_name
+                    - datasets/PaulGrahamEssays.jsonl
+                    - --dataset_format
+                    - multiple_passkey
+                    - --num_steps
+                    - "2000"
+                    - --lr
+                    - "0.01"
+                    - --reg_mode
+                    - hc
+                    - --reg_weight
+                    - "0.0013"
+                    - --initial_value
+                    - "0.0"
+                    - --target_sparsity
+                    - "0.8"
+                    - --select_mode
+                    - topp
+                    - --top_p
+                    - "0.9"
+                    - --min_blocks
+                    - "8"
+                    - --max_blocks
+                    - "64"
+                    - --min_needle_depth_ratio
+                    - "0.05"
+                    - --max_needle_depth_ratio
+                    - "0.95"
+                    - --context_length_min
+                    - "8000"
+                    - --context_length_max
+                    - "128000"
+                    - --context_lengths_num_intervals
+                    - "50"
+                    - --depth_ratio_num_intervals
+                    - "1000"
+                    - --gradient_accumulation_steps
+                    - "1"
+                    - --num_passkeys
+                    - "10"
+                    - --save_steps
+                    - "50"
+                    - --two_pass
+                    - --no_ac
+                    - --sp_size
+                    - "8"
+                    - --output_dir
+                    - attn_patterns/reuse_v1//root/paddlejob/share-storage/gpfs/system-public/yudaohai/data/Llama-3.1-8B-Instruct/hc-orig-rw=0.0013-init=0.0-sp=0.8-tp=0.9-lr=0.01-ctx=8000_128000-multi_passkey10-sp8
+                codePath: reuse_v1/train_reuse.py
+                codePathLocal: reuse_v1/train_reuse.py
+                cpu_count: 96
+                cpu_count_logical: 192
+                cudaVersion: "13.0"
+                disk:
+                    /:
+                        total: "3779302981632"
+                        used: "1763115589632"
+                email: yudaohai666@gmail.com
+                executable: /root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/.venv/bin/python
+                git:
+                    commit: a1c0c28e6daf713e2df85988dba61eedd286bd26
+                    remote: https://github.com/yudaohai666/ReAttn.git
+                gpu: CF-NG-BZZ2-O
+                gpu_count: 8
+                gpu_nvidia:
+                    - architecture: Blackwell
+                      cudaCores: 18944
+                      memoryTotal: "192265846784"
+                      name: CF-NG-BZZ2-O
+                      uuid: GPU-462d5db6-f4b3-a4c9-bdde-dd4c1176c630
+                    - architecture: Blackwell
+                      cudaCores: 18944
+                      memoryTotal: "192265846784"
+                      name: CF-NG-BZZ2-O
+                      uuid: GPU-752b2620-d32e-bf1f-6acb-ecd78c1b4d69
+                    - architecture: Blackwell
+                      cudaCores: 18944
+                      memoryTotal: "192265846784"
+                      name: CF-NG-BZZ2-O
+                      uuid: GPU-6f168b41-4b98-8dc5-1a43-95656b0072c4
+                    - architecture: Blackwell
+                      cudaCores: 18944
+                      memoryTotal: "192265846784"
+                      name: CF-NG-BZZ2-O
+                      uuid: GPU-7dd2f109-9804-04b0-07b4-a0721f08e001
+                    - architecture: Blackwell
+                      cudaCores: 18944
+                      memoryTotal: "192265846784"
+                      name: CF-NG-BZZ2-O
+                      uuid: GPU-e633bb44-882a-bbd4-d600-7dbb798288eb
+                    - architecture: Blackwell
+                      cudaCores: 18944
+                      memoryTotal: "192265846784"
+                      name: CF-NG-BZZ2-O
+                      uuid: GPU-10457b7d-eae4-74e4-4e3b-7da3a8ea64b0
+                    - architecture: Blackwell
+                      cudaCores: 18944
+                      memoryTotal: "192265846784"
+                      name: CF-NG-BZZ2-O
+                      uuid: GPU-7a4aa134-25ac-6744-984b-c39be78e2c25
+                    - architecture: Blackwell
+                      cudaCores: 18944
+                      memoryTotal: "192265846784"
+                      name: CF-NG-BZZ2-O
+                      uuid: GPU-f5ee4a49-7bff-d510-3a16-274c401ca256
+                host: tjzj-inf-sci-k8s-bzz2-00022.tjzj.baidu.com
+                memory:
+                    total: "3242055487488"
+                os: Linux-5.15.0-124-generic-x86_64-with-glibc2.39
+                program: /root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/reuse_v1/train_reuse.py
+                python: CPython 3.11.12
+                root: /root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn
+                startedAt: "2026-09-01T04:03:23.622120Z"
+                writerId: q11wo4f1kpbazt0xigmxf4epym0tnpgl
+        m: []
+        python_version: 3.11.12
+        t:
+            "1":
+                - 1
+                - 11
+                - 41
+                - 49
+                - 51
+                - 71
+            "2":
+                - 1
+                - 11
+                - 41
+                - 49
+                - 51
+                - 71
+            "3":
+                - 16
+                - 61
+            "4": 3.11.12
+            "5": 0.29.0
+            "6": 5.6.0
+            "12": 0.29.0
+            "13": linux-x86_64
+ac_group_size:
+    value: 1
+attn_load_dir:
+    value: null
+batch_size:
+    value: 1
+config_name:
+    value: null
+context_length:
+    value: 16384
+context_length_max:
+    value: 128000
+context_length_min:
+    value: 8000
+context_lengths_num_intervals:
+    value: 50
+dataset_format:
+    value: multiple_passkey
+dataset_name:
+    value: datasets/PaulGrahamEssays.jsonl
+deploy_recent_size:
+    value: null
+deploy_sink_size:
+    value: null
+depth_ratio_num_intervals:
+    value: 1000
+desired_density:
+    value: 0.08333
+device:
+    value: cuda:0
+disable_wandb:
+    value: false
+enable_pp:
+    value: false
+enable_tp:
+    value: false
+exp_name:
+    value: null
+generation_length:
+    value: 256
+gradient_accumulation_steps:
+    value: 1
+initial_value:
+    value: 0
+lagrange_lr:
+    value: 0.001
+lamda_init_value:
+    value: 2
+lr:
+    value: 0.01
+max_blocks:
+    value: 64
+max_length:
+    value: 128000
+max_needle_depth_ratio:
+    value: 0.95
+min_blocks:
+    value: 8
+min_needle_depth_ratio:
+    value: 0.05
+model_name:
+    value: /root/paddlejob/share-storage/gpfs/system-public/yudaohai/data/Llama-3.1-8B-Instruct
+n_samples:
+    value: null
+no_ac:
+    value: true
+num_passkeys:
+    value: 10
+num_steps:
+    value: 2000
+output_dir:
+    value: attn_patterns/reuse_v1//root/paddlejob/share-storage/gpfs/system-public/yudaohai/data/Llama-3.1-8B-Instruct/hc-orig-rw=0.0013-init=0.0-sp=0.8-tp=0.9-lr=0.01-ctx=8000_128000-multi_passkey10-sp8
+passkey_length:
+    value: 32
+prefilling_chunk_size:
+    value: 4096
+recent_size:
+    value: 256
+reg_mode:
+    value: hc
+reg_weight:
+    value: 0.0013
+resume:
+    value: false
+rope_theta:
+    value: null
+save_steps:
+    value: 50
+seed:
+    value: 42
+select_mode:
+    value: topp
+sink_size:
+    value: 64
+sp_size:
+    value: 8
+sparsity:
+    value: null
+split:
+    value: train
+streaming_attn_implementation:
+    value: blocksparse
+stride_length:
+    value: 256
+supervision:
+    value: distill
+target_sparsity:
+    value: 0.8
+task:
+    value: default
+threshold:
+    value: 0.5
+top_p:
+    value: 0.9
+two_pass:
+    value: true
+uniform_sparsity:
+    value: false
