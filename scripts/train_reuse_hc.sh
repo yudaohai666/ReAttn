@@ -22,7 +22,11 @@
 #   Logged metrics (wandb + progress bar), both over layers 1..L-1:
 #     l0_density  = mean P(z != 0) = mean sigmoid(log_alpha + 1.5986)
 #                   -- the true Hard Concrete L0 density; tune reg_weight on this
-#     anchor_frac = fraction with P(z != 0) > 0.5, i.e. log_alpha > -1.5986
+#     write_frac  = mean sigmoid(log_alpha) = expected fraction of heads that
+#                   fire the anchor-cache write (rule: z_h > 0.5) this step.
+#                   Compare against the deploy anchor fraction over the same
+#                   layers: (L*H*(1-target_sparsity) - H) / ((L-1)*H).
+#                   For L=32,H=8,target_sparsity=0.8 that is 43/248 = 0.173.
 #   target_sparsity is used ONLY at export (top-k cutoff), not during training.
 #
 # Usage:
@@ -31,7 +35,7 @@
 #   sp_size          Ulysses SP group size. Default 8.
 #   reg_weight       L0 penalty coefficient. Default 0.1.
 #   initial_value    Initial log_alpha. Default 0.0.
-#   target_sparsity  Fraction of heads to export as sparse (top-k cutoff). Default 0.79.
+#   target_sparsity  Fraction of heads to export as sparse (top-k cutoff). Default 0.8.
 #   top_p            Nucleus coverage for topp block selection. Default 0.7.
 #                    MUST match the inference-time top_p, or the exported head
 #                    labels will not transfer.
@@ -58,7 +62,7 @@ num_passkey=${5}
 sp_size=${6:-8}
 reg_weight=${7:-0.1}
 initial_value=${8:-0.0}
-target_sparsity=${9:-0.79}
+target_sparsity=${9:-0.8}
 top_p=${10:-0.7}
 
 setting="hc-orig-rw=${reg_weight}-init=${initial_value}-sp=${target_sparsity}-tp=${top_p}-lr=${lr}-ctx=${ctx_len_min}_${ctx_len_max}-multi_passkey${num_passkey}-sp${sp_size}"

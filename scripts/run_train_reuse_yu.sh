@@ -35,4 +35,4 @@ bash scripts/train_reuse_kuma.sh /root/paddlejob/share-storage/gpfs/system-publi
 #     target_sparsity. Layer 0 is forced all-anchor (log_alpha frozen at +10),
 #     excluded from both the penalty and the top-k; no streaming fallback.
 #     top_p MUST match the inference-time top_p. ---
-# bash scripts/train_reuse_hc.sh /root/paddlejob/share-storage/gpfs/system-public/yudaohai/data/Llama-3.1-8B-Instruct 8000 128000 0.01 10 8 0.002 0.0 0.79
+# bash scripts/train_reuse_hc.sh /root/paddlejob/share-storage/gpfs/system-public/yudaohai/data/Llama-3.1-8B-Instruct 8000 128000 0.01 10 8 0.002 0.0 0.8

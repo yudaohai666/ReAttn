@@ -490,9 +490,14 @@ def train(args, model, rank, world_size, train_dataloader, optimizer, scheduler,
                     # (log_alpha > 0), whose threshold corresponds to
                     # P(z != 0) = 0.83 and badly under-reports the density.
                     _l0_density = _p_nz.mean().item()
-                    # Fraction that would deploy as anchor under the natural
-                    # P(z != 0) > 0.5 cut, i.e. log_alpha > -1.5986.
-                    _anchor_frac = (_p_nz > 0.5).float().mean().item()
+                    # E[fraction of heads whose gate fires the anchor-cache
+                    # write this step]. The write rule is z[h] > 0.5, which
+                    # fires with probability sigmoid(log_alpha), so this is the
+                    # expected write COUNT / num_heads -- the zero-variance
+                    # version of (z > 0.5).float().mean(). Compare against the
+                    # deploy anchor fraction over the same layers 1..L-1:
+                    #   w_target = (L*H*(1 - target_sparsity) - H) / ((L-1)*H)
+                    _write_frac = torch.sigmoid(_la_snap).mean().item()
 
                 if do_save:
                     # Build the resumable gate state from the already-gathered
@@ -530,8 +535,9 @@ def train(args, model, rank, world_size, train_dataloader, optimizer, scheduler,
                     if reg_mode == "hc":
                         # E[fraction of heads with z != 0] (true HC L0 density).
                         log_dict["l0_density"] = _l0_density
-                        # Fraction with P(z != 0) > 0.5 (log_alpha > -1.5986).
-                        log_dict["anchor_frac"] = _anchor_frac
+                        # Expected fraction of heads writing the anchor cache
+                        # this step (= mean sigmoid(log_alpha)).
+                        log_dict["write_frac"] = _write_frac
                         log_dict["l0_reg"] = float(reg_loss.item())
                     wandb.log(log_dict, step=global_step)
                     plt.close(fig)
@@ -540,7 +546,7 @@ def train(args, model, rank, world_size, train_dataloader, optimizer, scheduler,
                     extra = (f"|dens={float(density.item()):.3f}"
                              f"|lam={float(lambda0.item()):.2e}")
                 elif reg_mode == "hc":
-                    extra = (f"|l0={_l0_density:.3f}|a={_anchor_frac:.3f}"
+                    extra = (f"|l0={_l0_density:.3f}|w={_write_frac:.3f}"
                              f"|rw={args.reg_weight:.4f}")
                 else:
                     extra = ""
