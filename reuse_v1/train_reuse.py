@@ -90,6 +90,10 @@ from torch.distributed._tensor import DeviceMesh
 
 from transformers import AutoModelForCausalLM, AutoConfig
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer
+try:
+    from transformers.models.qwen3.modeling_qwen3 import Qwen3DecoderLayer
+except ImportError:
+    Qwen3DecoderLayer = None
 
 # ---- LOCKED reuse_v1 hyperparameters (MUST match inference) ----
 # The block-SELECTION config (select_mode / top_p / min_blocks / max_blocks) is
@@ -831,7 +835,12 @@ def main(args):
             print(f"Grouped decoder layers into segments of {ac_group_size} "
                   f"for activation checkpointing.")
 
-    apply_fsdp(model, mesh, mp_policy, modules_to_shard={LlamaDecoderLayer})
+    # Determine which decoder layer class to shard (Qwen3 or Llama).
+    _decoder_cls = set()
+    _decoder_cls.add(LlamaDecoderLayer)
+    if Qwen3DecoderLayer is not None:
+        _decoder_cls.add(Qwen3DecoderLayer)
+    apply_fsdp(model, mesh, mp_policy, modules_to_shard=_decoder_cls)
 
     if getattr(args, "two_pass", False) and not getattr(args, "no_ac", False):
         from functools import partial
@@ -846,7 +855,11 @@ def main(args):
         )
         if ac_group_size > 1:
             ac_cls = _GroupedDecoderLayers
-            ac_desc = f"grouped segments of {ac_group_size} LlamaDecoderLayers"
+            ac_desc = f"grouped segments of {ac_group_size} decoder layers"
+        elif Qwen3DecoderLayer is not None and any(
+                isinstance(m, Qwen3DecoderLayer) for m in model.modules()):
+            ac_cls = Qwen3DecoderLayer
+            ac_desc = "Qwen3DecoderLayer"
         else:
             ac_cls = LlamaDecoderLayer
             ac_desc = "LlamaDecoderLayer"

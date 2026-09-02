@@ -145,11 +145,21 @@ class ReuseV1TrainHolder:
 
 
 def _project_qkv(self, hidden, H, Hkv, hd, cos, sin):
-    """Project + RoPE a single stream. Returns q/k/v in (b, H|Hkv, s, d)."""
+    """Project + RoPE a single stream. Returns q/k/v in (b, H|Hkv, s, d).
+
+    Supports both Llama-style and Qwen3-style attention: if the module has
+    q_norm / k_norm (Qwen3 QKNorm), they are applied per-head before RoPE,
+    matching the native Qwen3Attention.forward behavior.
+    """
     b, s, _ = hidden.size()
     q = self.q_proj(hidden).view(b, s, H, hd).transpose(1, 2)
     k = self.k_proj(hidden).view(b, s, Hkv, hd).transpose(1, 2)
     v = self.v_proj(hidden).view(b, s, Hkv, hd).transpose(1, 2)
+    # Qwen3 applies RMSNorm per head (on head_dim) before RoPE.
+    if hasattr(self, "q_norm"):
+        q = self.q_norm(q)
+    if hasattr(self, "k_norm"):
+        k = self.k_norm(k)
     q, k = apply_rotary_pos_emb(q, k, cos, sin)  # (b,H,s,d) layout, unsqueeze_dim=1
     return q.contiguous(), k.contiguous(), v.contiguous()
 
