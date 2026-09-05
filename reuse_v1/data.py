@@ -77,8 +77,8 @@ class MultiplePasskeyRetrievalDataset(Dataset):
         num_passkeys=10,
         needle="Remeber this sequence of words, it's the {ordinal_number} passkey to the vault: ",
         retrieval_question="Based on the content of the book, what is the {ordinal_number} passkey to the vault?\nPasskey: ",
-        prompt1="<|im_start|> This is a very long story book: <book> ",
-        prompt2=" </book>.\n\n",
+        prompt1=None,
+        prompt2=None,
         buffer_size=300,
         seperator="\n\n",
         min_depth_ratio=0.1,
@@ -92,6 +92,22 @@ class MultiplePasskeyRetrievalDataset(Dataset):
         super(MultiplePasskeyRetrievalDataset, self).__init__()
 
         self.tokenizer = tokenizer
+
+        # Auto-select prompt wrappers based on tokenizer vocabulary.
+        # Qwen3/Qwen2 use <|im_start|> (id=151644) as a true special token, so
+        # the training sequence must follow ChatML format to match inference.
+        # For Llama and others, <|im_start|> is plain text, so the legacy
+        # prefix is harmless and kept for backward compatibility.
+        if prompt1 is None or prompt2 is None:
+            _is_qwen = (
+                tokenizer.convert_tokens_to_ids("<|im_start|>") == 151644
+            )
+            if _is_qwen:
+                prompt1 = "<|im_start|>user\nThis is a very long story book: <book> "
+                prompt2 = " </book>.<|im_end|>\n<|im_start|>assistant\n"
+            else:
+                prompt1 = "<|im_start|> This is a very long story book: <book> "
+                prompt2 = " </book>.\n\n"
 
         self.max_length = (
             max_length if max_length is not None else tokenizer.model_max_length

@@ -7,6 +7,7 @@ from functools import partial
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from transformers.models.llama.modeling_llama import LlamaAttention
 from transformers.models.qwen2.modeling_qwen2 import Qwen2Attention
+from transformers.models.qwen3.modeling_qwen3 import Qwen3Attention
 from transformers.cache_utils import Cache
 from typing import Optional, Tuple, Callable
 
@@ -256,75 +257,158 @@ def patched_attention_forward(
             **kwargs
         )
 
+def patched_attention_forward_qwen3(
+    self,  # Qwen3Attention
+    hidden_states: torch.Tensor,
+    position_embeddings: tuple[torch.Tensor, torch.Tensor],
+    attention_mask: Optional[torch.Tensor],
+    past_key_values: Optional[Cache] = None,
+    prefill_fn: Optional[Callable] = None,
+    **kwargs,
+) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+    """
+    Patched forward for Qwen3Attention.
+    Qwen3 applies q_norm/k_norm after projection and before RoPE, and uses
+    past_key_values.update(key, value, layer_idx) without cache_kwargs.
+    """
+    bsz, q_len, _ = hidden_states.size()
+
+    if q_len > 1:
+        input_shape = hidden_states.shape[:-1]
+        hidden_shape = (*input_shape, -1, self.head_dim)
+
+        # Projection + QKNorm (Qwen3-specific)
+        query_states = self.q_norm(self.q_proj(hidden_states).view(hidden_shape)).transpose(1, 2)
+        key_states = self.k_norm(self.k_proj(hidden_states).view(hidden_shape)).transpose(1, 2)
+        value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+
+        local_num_q_heads = query_states.shape[1]
+        local_num_kv_heads = key_states.shape[1]
+
+        # RoPE
+        cos, sin = position_embeddings
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+
+        if past_key_values is not None:
+            key_states, value_states = past_key_values.update(key_states, value_states, self.layer_idx)
+
+        kv_repeat = max(1, local_num_q_heads // max(1, local_num_kv_heads))
+
+        if prefill_fn is None:
+            raise RuntimeError("prefill_fn required.")
+
+        kernel_fn = prefill_fn.func if isinstance(prefill_fn, partial) else prefill_fn
+        prefill_kwargs = {}
+        if 'num_key_value_groups' in kernel_fn.__code__.co_varnames:
+            prefill_kwargs['num_key_value_groups'] = kv_repeat
+        else:
+            key_states = repeat_kv(key_states, kv_repeat)
+            value_states = repeat_kv(value_states, kv_repeat)
+        if 'layer_idx' in kernel_fn.__code__.co_varnames:
+            prefill_kwargs['layer_idx'] = self.layer_idx
+        attn_output = prefill_fn(query_states, key_states, value_states, **prefill_kwargs)
+
+        attn_output = attn_output.transpose(1, 2).reshape(bsz, q_len, local_num_q_heads * self.head_dim)
+        attn_output = self.o_proj(attn_output)
+        return attn_output, None
+    else:
+        return self.original_forward(
+            hidden_states=hidden_states,
+            position_embeddings=position_embeddings,
+            attention_mask=attention_mask,
+            past_key_values=past_key_values,
+            **kwargs
+        )
+
+
 def apply_patch_with_prefill(model, prefill_fn: Optional[Callable] = None, skip_layers: Optional[list] = None):
     """
     Apply the monkey patch to all self-attention layers with a specific prefill function.
-    Supports both Llama and Qwen models.
-    
+    Supports Llama, Qwen2, and Qwen3 models.
+
     Args:
-        model: The model to patch (LlamaForCausalLM or Qwen2ForCausalLM)
+        model: The model to patch (LlamaForCausalLM, Qwen2ForCausalLM, or Qwen3ForCausalLM)
         prefill_fn: A callable configured with partial() for the specific kernel and parameters
         skip_layers: A list of layer indices to skip when applying the patch (0-indexed)
     """
     if skip_layers is None:
         skip_layers = []
-    
+
     # Validate model type
     if not is_model_supported(model):
         supported_types = get_supported_model_types()
         raise ValueError(f"Model type {type(model).__name__} is not supported. Supported types: {supported_types}")
-    
+
     # Detect model type
     model_type = type(model).__name__
+    is_qwen3 = model_type == "Qwen3ForCausalLM"
     attention_type = type(model.model.layers[0].self_attn).__name__ if len(model.model.layers) > 0 else "Unknown"
-    
+
     print(f"\nApplying monkey patch to {model_type} with {attention_type}")
     print(f"Prefill function: {getattr(prefill_fn, 'func', prefill_fn).__name__ if prefill_fn else 'MeanPooling_prefill'}")
     if skip_layers:
         print(f"Skipping layers: {skip_layers}")
-    
+
     patched_count = 0
     total_layers = len(model.model.layers)
-    
+
     for layer_idx, layer in enumerate(model.model.layers):
         if layer_idx in skip_layers:
             print(f"  Skipping layer {layer_idx}")
             continue
-            
+
         # Store the original forward method
         layer.self_attn.original_forward = layer.self_attn.forward
-        
-        # This wrapper will become the new forward method.
-        def new_forward(
-            self,
-            hidden_states: torch.Tensor,
-            position_embeddings: tuple[torch.Tensor, torch.Tensor],
-            attention_mask: Optional[torch.Tensor] = None,
-            past_key_values: Optional[Cache] = None,
-            cache_position: Optional[torch.LongTensor] = None,
-            **kwargs,
-        ):
-            return patched_attention_forward(
+
+        if is_qwen3:
+            def new_forward(
                 self,
-                hidden_states=hidden_states,
-                position_embeddings=position_embeddings,
-                attention_mask=attention_mask,
-                past_key_values=past_key_values,
-                cache_position=cache_position,
-                prefill_fn=prefill_fn,
-                **kwargs
-            )
-        
+                hidden_states: torch.Tensor,
+                position_embeddings: tuple[torch.Tensor, torch.Tensor],
+                attention_mask: Optional[torch.Tensor] = None,
+                past_key_values: Optional[Cache] = None,
+                **kwargs,
+            ):
+                return patched_attention_forward_qwen3(
+                    self,
+                    hidden_states=hidden_states,
+                    position_embeddings=position_embeddings,
+                    attention_mask=attention_mask,
+                    past_key_values=past_key_values,
+                    prefill_fn=prefill_fn,
+                    **kwargs
+                )
+        else:
+            def new_forward(
+                self,
+                hidden_states: torch.Tensor,
+                position_embeddings: tuple[torch.Tensor, torch.Tensor],
+                attention_mask: Optional[torch.Tensor] = None,
+                past_key_values: Optional[Cache] = None,
+                cache_position: Optional[torch.LongTensor] = None,
+                **kwargs,
+            ):
+                return patched_attention_forward(
+                    self,
+                    hidden_states=hidden_states,
+                    position_embeddings=position_embeddings,
+                    attention_mask=attention_mask,
+                    past_key_values=past_key_values,
+                    cache_position=cache_position,
+                    prefill_fn=prefill_fn,
+                    **kwargs
+                )
+
         # Apply the patch
         layer.self_attn.forward = types.MethodType(new_forward, layer.self_attn)
         patched_count += 1
-    
+
     print(f"✅ Monkey patch applied successfully. Patched {patched_count}/{total_layers} layers.")
     return model
 
 def get_supported_model_types():
     """Return list of supported model types for patching."""
-    return ["LlamaForCausalLM", "Qwen2ForCausalLM"]
+    return ["LlamaForCausalLM", "Qwen2ForCausalLM", "Qwen3ForCausalLM"]
 
 def is_model_supported(model):
     """Check if a model is supported for patching."""

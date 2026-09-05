@@ -2,6 +2,7 @@
 import os
 import sys
 from typing import Optional, Callable
+from transformers import AutoConfig
 
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -47,6 +48,19 @@ class PatchedHuggingFaceCausalLM(HuggingFacewithChatTemplate):
     
     def _load_model(self, path: str, kwargs: dict, peft_path: Optional[str] = None, peft_kwargs: dict = dict()):
         """Override _load_model to apply patch after model loading."""
+        # Inject YaRN RoPE config for Qwen3 before loading (applies to all paths)
+        model_config = AutoConfig.from_pretrained(path)
+        self._is_qwen3 = getattr(model_config, "model_type", None) == "qwen3"
+        if self._is_qwen3:
+            model_config.rope_parameters = {
+                "rope_theta": 1000000,
+                "rope_type": "yarn",
+                "factor": 4.0,
+                "original_max_position_embeddings": 32768,
+            }
+            model_config.max_position_embeddings = 131072
+            kwargs["config"] = model_config
+
         # sparse_reuse loads its own model (custom attn_implementation + paged
         # cache) instead of the vanilla HF model + prefill monkey-patch.
         if self.patch_type == 'sparse_reuse':
@@ -55,6 +69,14 @@ class PatchedHuggingFaceCausalLM(HuggingFacewithChatTemplate):
 
         # First load the model normally
         super()._load_model(path, kwargs, peft_path, peft_kwargs)
+
+        # Patch tokenizer to disable thinking mode for Qwen3
+        if self._is_qwen3:
+            _orig_apply_chat_template = self.tokenizer.apply_chat_template
+            def _apply_chat_template_no_think(*args, **kw):
+                kw.setdefault('enable_thinking', False)
+                return _orig_apply_chat_template(*args, **kw)
+            self.tokenizer.apply_chat_template = _apply_chat_template_no_think
 
         # Then apply the appropriate patch
         prefill_fn = self._get_prefill_function()
@@ -102,6 +124,7 @@ class PatchedHuggingFaceCausalLM(HuggingFacewithChatTemplate):
             dtype=dtype,
             device='cuda',
             paged_cache_max_kv_len=init_kv_len,
+            model_config=kwargs.get('config', None),
             **pk,
         )
         model.generation_config.do_sample = False

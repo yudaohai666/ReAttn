@@ -1,5 +1,7 @@
 from opencompass_models import PatchedHuggingFaceCausalLM
 
+_MODEL_PATH = '/root/paddlejob/share-storage/gpfs/system-public/yudaohai/data/Qwen2.5-7B-Instruct-1M'
+
 # Checkpoint (label) path for the sparse_reuse model. Override at runtime via the
 # QWEN_SPARSE_LABEL_PATH env var (e.g. set it in scripts/*.sh); defaults to full_head.pt.
 # Use __import__ to avoid a top-level `import os` (keeps this lazy-import safe).
@@ -7,6 +9,16 @@ _SPARSE_LABEL_PATH = __import__('os').environ.get(
     'QWEN_SPARSE_LABEL_PATH',
     '/root/paddlejob/inference-public/yudaohai/sparse_attention/pbs-attn/ckp/Qwen2.5-7B-Instruct-1M/full_head.pt',
 )
+
+# Label path for reuse_v1. Override at runtime via QWEN25_1M_REUSE_V1_LABEL_PATH.
+_REUSE_V1_LABEL_PATH = __import__('os').environ.get(
+    'QWEN25_1M_REUSE_V1_LABEL_PATH',
+    '/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/attn_patterns/reuse_v1'
+    '/Qwen2.5-7B-Instruct-1M'
+    '/hc-orig-rw=0.008-init=0.0-sp=0.8-tp=0.7-lr=0.01-ctx=8000_131072-multi_passkey10-sp4/label.pt',
+)
+
+_REUSE_V1_LAST_Q_FULL = __import__('os').environ.get('QWEN25_1M_REUSE_V1_LAST_Q_FULL', '0') == '1'
 
 qwen_25_7b_1m_flashattn_models = [
     dict(
@@ -120,6 +132,33 @@ qwen2_5_7b_1m_pbs_models = [
         model_kwargs=dict(
             torch_dtype='torch.bfloat16'
         ),
+        max_out_len=2048,
+        batch_size=1,
+        run_cfg=dict(num_gpus=1),
+    ),
+]
+
+qwen2_5_7b_1m_reuse_v1_models = [
+    dict(
+        type=PatchedHuggingFaceCausalLM,
+        abbr='qwen2_5-7b-instruct-1m-reuse-v1',
+        path=_MODEL_PATH,
+        patch_type='reuse_v1',
+        patch_kwargs=dict(
+            label_path=_REUSE_V1_LABEL_PATH,
+            budget=32,
+            block_size=128,
+            segment_size=2048,
+            sink_blocks=1,
+            local_blocks=2,
+            causal=True,
+            select_mode='topp',
+            top_p=0.7,
+            min_blocks=8,
+            max_blocks=64,
+            last_q_full=_REUSE_V1_LAST_Q_FULL,
+        ),
+        model_kwargs=dict(torch_dtype='torch.bfloat16'),
         max_out_len=2048,
         batch_size=1,
         run_cfg=dict(num_gpus=1),

@@ -94,6 +94,10 @@ try:
     from transformers.models.qwen3.modeling_qwen3 import Qwen3DecoderLayer
 except ImportError:
     Qwen3DecoderLayer = None
+try:
+    from transformers.models.qwen2.modeling_qwen2 import Qwen2DecoderLayer
+except ImportError:
+    Qwen2DecoderLayer = None
 
 # ---- LOCKED reuse_v1 hyperparameters (MUST match inference) ----
 # The block-SELECTION config (select_mode / top_p / min_blocks / max_blocks) is
@@ -714,6 +718,20 @@ def main(args):
     config = AutoConfig.from_pretrained(args.config_name or args.model_name)
     if args.rope_theta is not None:
         config.rope_theta = args.rope_theta
+    if getattr(config, "model_type", None) == "qwen3":
+        config.rope_parameters = {
+            "rope_theta": 1000000,
+            "rope_type": "yarn",
+            "factor": 4.0,
+            "original_max_position_embeddings": 32768,
+        }
+        config.max_position_embeddings = 131072
+    elif getattr(config, "model_type", None) == "qwen2":
+        # Qwen2.5-1M uses rope_theta=1e7 natively (no YaRN needed).
+        # Neutralize dual_chunk_attention_config to prevent any serving-side
+        # code path from activating a non-standard attention forward.
+        if hasattr(config, "dual_chunk_attention_config"):
+            config.dual_chunk_attention_config = None
 
     model = AutoModelForCausalLM.from_pretrained(
         args.model_name,
@@ -835,11 +853,13 @@ def main(args):
             print(f"Grouped decoder layers into segments of {ac_group_size} "
                   f"for activation checkpointing.")
 
-    # Determine which decoder layer class to shard (Qwen3 or Llama).
+    # Determine which decoder layer class to shard (Qwen3, Qwen2, or Llama).
     _decoder_cls = set()
     _decoder_cls.add(LlamaDecoderLayer)
     if Qwen3DecoderLayer is not None:
         _decoder_cls.add(Qwen3DecoderLayer)
+    if Qwen2DecoderLayer is not None:
+        _decoder_cls.add(Qwen2DecoderLayer)
     apply_fsdp(model, mesh, mp_policy, modules_to_shard=_decoder_cls)
 
     if getattr(args, "two_pass", False) and not getattr(args, "no_ac", False):
@@ -860,6 +880,10 @@ def main(args):
                 isinstance(m, Qwen3DecoderLayer) for m in model.modules()):
             ac_cls = Qwen3DecoderLayer
             ac_desc = "Qwen3DecoderLayer"
+        elif Qwen2DecoderLayer is not None and any(
+                isinstance(m, Qwen2DecoderLayer) for m in model.modules()):
+            ac_cls = Qwen2DecoderLayer
+            ac_desc = "Qwen2DecoderLayer"
         else:
             ac_cls = LlamaDecoderLayer
             ac_desc = "LlamaDecoderLayer"

@@ -29,7 +29,7 @@ for _p in (str(TEST_DIR), str(REPO_ROOT)):
         sys.path.insert(0, _p)
 
 from needle import LLMNeedleHaystackTester, ModelProvider  # noqa: E402
-from transformers import AutoModelForCausalLM, AutoTokenizer  # noqa: E402
+from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig  # noqa: E402
 from pbs_attn.patch.huggingface import (  # noqa: E402
     apply_patch_with_prefill,
     get_meanpooling_prefill,
@@ -76,13 +76,34 @@ class SparseAttnModel(ModelProvider):
         self.method = method
         self.max_new_tokens = int(max_new_tokens)
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        # Disable thinking mode for Qwen3 models
+        self._is_qwen3 = "Qwen3" in model_name
         self._reuse_cache = None
 
+        # Build model config with overrides per model_type
+        model_config = AutoConfig.from_pretrained(model_name)
+        _model_type = getattr(model_config, "model_type", "")
+        if self._is_qwen3:
+            model_config.rope_parameters = {
+                "rope_theta": 1000000,
+                "rope_type": "yarn",
+                "factor": 4.0,
+                "original_max_position_embeddings": 32768,
+            }
+            model_config.max_position_embeddings = 131072
+        elif _model_type == "qwen2":
+            # Qwen2.5-1M: neutralize dual_chunk_attention_config so the standard
+            # attention forward is used (matching training configuration).
+            if hasattr(model_config, "dual_chunk_attention_config"):
+                model_config.dual_chunk_attention_config = None
+
+        _needs_config_override = self._is_qwen3 or _model_type == "qwen2"
         if method == "sparse_reuse":
-            self._load_sparse_reuse(model_name, patch_kwargs, dtype)
+            self._load_sparse_reuse(model_name, patch_kwargs, dtype, model_config if _needs_config_override else None)
         else:
             self.model = AutoModelForCausalLM.from_pretrained(
                 model_name,
+                config=model_config,
                 torch_dtype=dtype,
                 device_map="cuda",
                 attn_implementation=attn_impl,
@@ -96,7 +117,7 @@ class SparseAttnModel(ModelProvider):
             else:
                 raise ValueError(f"unknown method: {method}")
 
-    def _load_sparse_reuse(self, model_name, patch_kwargs, dtype):
+    def _load_sparse_reuse(self, model_name, patch_kwargs, dtype, model_config=None):
         """sparse_reuse replaces the attention impl + drives a paged cache."""
         from sparse_attn.sparse_reuse import load_model_with_reuse
 
@@ -114,6 +135,7 @@ class SparseAttnModel(ModelProvider):
             dtype=dtype,
             device="cuda",
             paged_cache_max_kv_len=int(init_kv_len),
+            model_config=model_config,
             **pk,
         )
         model.generation_config.do_sample = False
@@ -131,6 +153,7 @@ class SparseAttnModel(ModelProvider):
             add_generation_prompt=True,
             return_tensors="pt",
             return_dict=False,
+            enable_thinking=False if self._is_qwen3 else None,
         ).to(self.model.device)
 
         generate_kwargs = dict(

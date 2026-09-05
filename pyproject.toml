@@ -7,7 +7,7 @@ authors = [
     { name = "daohaiyu", email = "" }
 ]
 # extensions (flash-attn, block_sparse_attn_cuda).
-requires-python = ">=3.11,<=3.12"
+requires-python = ">=3.10,<3.11"
 dependencies = [
     # core
     "torch==2.8.0",
@@ -15,9 +15,9 @@ dependencies = [
     "torchvision",
     "numpy==1.26.4", # must stay <2: pinned by the prebuilt extensions and opencompass
     # training stack
-    "transformers==5.6.0",
+    "transformers==5.4.0",
     "tokenizers",
-    "accelerate==1.14.0",
+    "accelerate==1.14.0", 
     "datasets==3.6.0",
     "safetensors==0.8.0",
     "einops==0.8.2",
@@ -27,7 +27,10 @@ dependencies = [
     "matplotlib==3.10.9",
     "wandb",
     # fused attention kernels (compiled, see tool.uv.no-build-isolation-package)
-    "flash-attn==2.7.4.post1",
+    # 2.8.3, not 2.7.4.post1: upstream ships prebuilt wheels only up to
+    # torch2.7 for 2.7.4.post1, and torch 2.8 breaks the libtorch ABI. Only
+    # flash_attn_func is used here, which is unchanged between the two.
+    "flash-attn==2.8.3",
     "block-sparse-attn==0.0.2",
     # required in-env: flash-attn / block-sparse-attn are built without build
     # isolation, so their setup.py needs setuptools available here.
@@ -61,6 +64,11 @@ torch = { index = "pytorch-cuda129" }
 torchaudio = { index = "pytorch-cuda129" }
 torchvision = { index = "pytorch-cuda129" }
 block-sparse-attn = { path = "Block-Sparse-Attention", editable = true }
+# Prebuilt wheel for torch 2.8 + cu12 + cp310 + cxx11abiTRUE, kept on the shared
+# mount so any node syncs in seconds instead of doing a multi-hour source build:
+#   https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.8cxx11abiTRUE-cp310-cp310-linux_x86_64.whl
+# If torch or Python is bumped, fetch the matching variant and update this path.
+flash-attn = { path = "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/wheels/flash_attn-2.8.3+cu12torch2.8cxx11abiTRUE-cp310-cp310-linux_x86_64.whl" }
 
 [[tool.uv.index]]
 name = "pypi"

@@ -9,7 +9,7 @@ from typing import List
 import torch
 import torch.distributed as dist
 from datasets import load_dataset
-from transformers import AutoTokenizer, AutoModelForCausalLM, HfArgumentParser
+from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig, HfArgumentParser
 from transformers import logging as hf_logging
 
 from tqdm import tqdm
@@ -326,7 +326,16 @@ def main(script_args, method_args):
             from_pretrained_kwargs["tp_plan"] = "auto"
         else:
             from_pretrained_kwargs["device_map"] = "auto"
-        model = AutoModelForCausalLM.from_pretrained(model_name, **from_pretrained_kwargs)
+        model_config = AutoConfig.from_pretrained(model_name)
+        if getattr(model_config, "model_type", None) == "qwen3":
+            model_config.rope_parameters = {
+                "rope_theta": 1000000,
+                "rope_type": "yarn",
+                "factor": 4.0,
+                "original_max_position_embeddings": 32768,
+            }
+            model_config.max_position_embeddings = 131072
+        model = AutoModelForCausalLM.from_pretrained(model_name, config=model_config, **from_pretrained_kwargs)
 
         prefill_fn = build_prefill_fn(script_args.method, method_args)
         model = apply_patch_with_prefill(model, prefill_fn)
