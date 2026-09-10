@@ -645,7 +645,7 @@ def _restore_gate_state(model, gate_state, reg_mode):
 def _export_label(gates, output_dir, reg_mode="l1", desired_density=None,
                   target_sparsity=None, uniform_sparsity=False,
                   select_mode="topk", top_p=None, min_blocks=None,
-                  max_blocks=None):
+                  max_blocks=None, topk_ratio=None):
     """Write the reuse_v1 label: (num_layers, Hkv) bool tensor.
 
     Saves ``label.pt`` (bool tensor consumed by reuse_prefill.load_label),
@@ -681,6 +681,7 @@ def _export_label(gates, output_dir, reg_mode="l1", desired_density=None,
     meta = {
         "select_mode": select_mode,
         "top_p": float(top_p) if top_p is not None else None,
+        "topk_ratio": float(topk_ratio) if topk_ratio is not None else None,
         "min_blocks": int(min_blocks) if min_blocks is not None else None,
         "max_blocks": int(max_blocks) if max_blocks is not None else None,
         "budget": BUDGET,
@@ -755,6 +756,7 @@ def main(args):
         top_p=args.top_p,
         min_blocks=args.min_blocks,
         max_blocks=args.max_blocks,
+        topk_ratio=getattr(args, "topk_ratio", None),
     )
 
     # Train only the gates; keep the shared holder reachable from the LlamaModel.
@@ -1010,7 +1012,8 @@ def main(args):
             target_sparsity=getattr(args, "target_sparsity", None),
             uniform_sparsity=getattr(args, "uniform_sparsity", False),
             select_mode=args.select_mode, top_p=args.top_p,
-            min_blocks=args.min_blocks, max_blocks=args.max_blocks)
+            min_blocks=args.min_blocks, max_blocks=args.max_blocks,
+            topk_ratio=getattr(args, "topk_ratio", None))
         print(f"Training finished. label shape={tuple(label.shape)} "
               f"anchor_sparsity={sparsity:.3f} -> {args.output_dir}/label.pt")
 

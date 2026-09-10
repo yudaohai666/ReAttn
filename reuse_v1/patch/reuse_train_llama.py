@@ -83,7 +83,7 @@ class ReuseV1TrainHolder:
 
     def __init__(self, budget, block_size, segment_size, sink_blocks,
                  local_blocks, causal=True, select_mode="topk", top_p=0.9,
-                 min_blocks=8, max_blocks=64):
+                 min_blocks=8, max_blocks=64, topk_ratio=None):
         self.budget = budget
         self.block_size = block_size
         self.segment_size = segment_size
@@ -100,6 +100,7 @@ class ReuseV1TrainHolder:
         self.top_p = top_p
         self.min_blocks = min_blocks
         self.max_blocks = max_blocks
+        self.topk_ratio = topk_ratio
         self.sels = {}
         # Forward mode set by the train loop; defaults to single-pass behavior:
         #   "single"       one-pass, grad in the same b=2 forward.
@@ -243,7 +244,7 @@ def _student_dense_and_select(self, student_hidden, H, Hkv, hd, G, cos, sin, hol
             sink_blocks=holder.sink_blocks, local_blocks=holder.local_blocks,
             causal=holder.causal, select_mode=holder.select_mode,
             top_p=holder.top_p, min_blocks=holder.min_blocks,
-            max_blocks=holder.max_blocks,
+            max_blocks=holder.max_blocks, topk_ratio=holder.topk_ratio,
         )
         return out_dense_h.transpose(1, 2), (k_sel, k_cnt)
 
@@ -421,7 +422,8 @@ def _sp_student_dense_and_select(self, hidden, H, Hkv, hd, G, cos, sin, holder):
             block_score, G, holder.budget, sink_blocks=holder.sink_blocks,
             local_blocks=holder.local_blocks, causal=holder.causal,
             select_mode=holder.select_mode, top_p=holder.top_p,
-            min_blocks=holder.min_blocks, max_blocks=holder.max_blocks)
+            min_blocks=holder.min_blocks, max_blocks=holder.max_blocks,
+            topk_ratio=holder.topk_ratio)
         return out_dense_h, (k_sel, k_cnt)
 
 
@@ -710,6 +712,7 @@ def enable_llama_reuse_v1_training(
     top_p=0.9,
     min_blocks=8,
     max_blocks=64,
+    topk_ratio=None,
 ):
     """Install the two-way reuse_v1 training forward + per-kv-head gate.
 
@@ -749,6 +752,7 @@ def enable_llama_reuse_v1_training(
         top_p=top_p,
         min_blocks=min_blocks,
         max_blocks=max_blocks,
+        topk_ratio=topk_ratio,
     )
     holder.reg_mode = reg_mode
     model._reuse_holder = holder

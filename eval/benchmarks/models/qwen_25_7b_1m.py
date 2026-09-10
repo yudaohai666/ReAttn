@@ -121,7 +121,7 @@ qwen2_5_7b_1m_pbs_models = [
     dict(
         type=PatchedHuggingFaceCausalLM,
         abbr='qwen2_5-7b-instruct-1m-pbs',
-        path='Qwen/Qwen2.5-7B-Instruct-1M',
+        path=_MODEL_PATH,
         patch_type='pbs',
         patch_kwargs=dict(
             block_size=128,

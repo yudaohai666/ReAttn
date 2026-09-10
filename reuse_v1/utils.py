@@ -110,14 +110,15 @@ def parse_args():
         "--select_mode",
         type=str,
         default="topk",
-        choices=["topk", "topp"],
+        choices=["topk", "topp", "topk_ratio"],
         help="reuse_v1 training: student sparse-branch block selection. 'topk' "
         "(default) keeps a fixed --budget blocks (byte-identical to the original "
         "path). 'topp' = nucleus: keep the fewest top-scored blocks whose "
         "cumulative mean-mass >= --top_p, count clamped to [--min_blocks, "
-        "--max_blocks] (--budget then only sizes the cache-fallback width). MUST "
-        "match the reuse_v1 INFERENCE selection or the exported head label will "
-        "not transfer.",
+        "--max_blocks] (--budget then only sizes the cache-fallback width). "
+        "'topk_ratio' = dynamic per-q-block budget = ceil(causal_valid_k * "
+        "--topk_ratio), clamped to [--min_blocks, nkb]. MUST match the reuse_v1 "
+        "INFERENCE selection or the exported head label will not transfer.",
     )
     parser.add_argument(
         "--top_p",
@@ -126,11 +127,18 @@ def parse_args():
         help="--select_mode topp only: cumulative mean-mass threshold (nucleus).",
     )
     parser.add_argument(
+        "--topk_ratio",
+        type=float,
+        default=None,
+        help="--select_mode topk_ratio only: per-q-block budget = "
+        "ceil(causal_valid_k * topk_ratio), clamped to [--min_blocks, nkb].",
+    )
+    parser.add_argument(
         "--min_blocks",
         type=int,
         default=8,
-        help="--select_mode topp only: lower bound on the FINAL per-kv-head "
-        "block count (includes sink + diagonal + local).",
+        help="--select_mode topp / topk_ratio: lower bound on the FINAL "
+        "per-kv-head block count (includes sink + diagonal + local).",
     )
     parser.add_argument(
         "--max_blocks",

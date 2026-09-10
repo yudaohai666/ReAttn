@@ -491,6 +491,7 @@ def select_topk_blocks(
     topk_ratio: float = None,    # if set, budget = ceil(causal_valid_k * topk_ratio) per q-block
     sink_blocks: int = 1,
     local_blocks: int = 1,
+    min_blocks: int = 1,         # lower bound on per-q-block budget (topk_ratio branch only)
 ) -> torch.Tensor:
     """Aggregate full-head block scores and pick top-``budget`` k-blocks per q-block.
 
@@ -525,7 +526,7 @@ def select_topk_blocks(
         # Per-q-block dynamic budget: ceil(causal_valid_k * topk_ratio) content blocks.
         causal_valid_k = (qb_idx + off).clamp_(max=nkb - 1) + 1  # (nqb,)
         per_qb_budget = torch.ceil(causal_valid_k.float() * topk_ratio).long()  # (nqb,)
-        per_qb_budget = per_qb_budget.clamp_(min=1, max=nkb)
+        per_qb_budget = per_qb_budget.clamp_(min=max(1, min_blocks), max=nkb)
 
         k = int(per_qb_budget.max().item())
         topv, topi = imp.topk(k, dim=-1)                    # (b, nqb, k)
@@ -1227,6 +1228,7 @@ def select_topk_blocks_per_kv_head(
     top_p: float = 0.9,
     min_blocks: int = 8,
     max_blocks: int = 64,
+    topk_ratio: float = None,    # topk_ratio mode: per-q-block budget = ceil(valid_k * topk_ratio)
 ):
     """Per-kv-head block selection: aggregate the G q-heads of each kv head, then
     select k-blocks independently per kv head.
@@ -1249,11 +1251,23 @@ def select_topk_blocks_per_kv_head(
 
     if select_mode == 'topk':
         max_sel = _resolve_max_sel('topk', budget, max_blocks, nqb,
-                                   sink_blocks=sink_blocks, local_blocks=local_blocks)
+                                   sink_blocks=sink_blocks, local_blocks=local_blocks,
+                                   topk_ratio=topk_ratio)
         mask = select_topk_blocks(bs_flat, budget=budget, causal=causal,
                                   force_first=(sink_blocks > 0), agg='max',
-                                  topk_ratio=None, sink_blocks=sink_blocks,
-                                  local_blocks=local_blocks)
+                                  topk_ratio=topk_ratio, sink_blocks=sink_blocks,
+                                  local_blocks=local_blocks, min_blocks=min_blocks)
+        k_sel, k_cnt = _compact_block_mask(mask, max_sel)
+    elif select_mode == 'topk_ratio':
+        # Dynamic per-q-block budget = ceil(causal_valid_k * topk_ratio),
+        # clamped to [min_blocks, nkb].
+        max_sel = _resolve_max_sel('topk', budget, max_blocks, nqb,
+                                   sink_blocks=sink_blocks, local_blocks=local_blocks,
+                                   topk_ratio=topk_ratio)
+        mask = select_topk_blocks(bs_flat, budget=budget, causal=causal,
+                                  force_first=(sink_blocks > 0), agg='max',
+                                  topk_ratio=topk_ratio, sink_blocks=sink_blocks,
+                                  local_blocks=local_blocks, min_blocks=min_blocks)
         k_sel, k_cnt = _compact_block_mask(mask, max_sel)
     elif select_mode == 'topp':
         max_sel = _resolve_max_sel('topp', budget, max_blocks, nqb,

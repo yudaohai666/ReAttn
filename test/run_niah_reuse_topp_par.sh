@@ -5,9 +5,15 @@
 set -uo pipefail
 
 REPO_ROOT="/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn"
-MODEL="/root/paddlejob/share-storage/gpfs/system-public/yudaohai/data/Llama-3.1-8B-Instruct"
+MODEL="${MODEL:-/root/paddlejob/share-storage/gpfs/system-public/yudaohai/data/Llama-3.1-8B-Instruct}"
 PY="${REPO_ROOT}/.venv/bin/python"
-LABEL="${REPO_ROOT}/attn_patterns/reuse_v1/root/paddlejob/share-storage/gpfs/system-public/yudaohai/data/Llama-3.1-8B-Instruct/hc-orig-rw=0.0013-init=0.0-sp=0.8-tp=0.9-lr=0.01-ctx=8000_128000-multi_passkey10-sp8/label.pt"
+LABEL="${LABEL:-${REPO_ROOT}/attn_patterns/reuse_v1/root/paddlejob/share-storage/gpfs/system-public/yudaohai/data/Llama-3.1-8B-Instruct/hc-orig-rw=0.0013-init=0.0-sp=0.8-tp=0.9-lr=0.01-ctx=8000_128000-multi_passkey10-sp8/label.pt}"
+TOP_P="${TOP_P:-0.9}"
+# SELECT_MODE=topk_ratio + TOPK_RATIO=<r> evaluates topk-ratio labels (dirname
+# tkr=<r>); per-q-block budget = ceil(causal_valid_k * r) clamped to MIN_BLOCKS.
+SELECT_MODE="${SELECT_MODE:-topp}"
+TOPK_RATIO="${TOPK_RATIO:-}"
+MIN_BLOCKS="${MIN_BLOCKS:-8}"
 
 METHOD="${METHOD:-reuse_v1}"
 RUN_TAG="${RUN_TAG:-topp0.9_rw0.0013_sp0.8}"
@@ -33,7 +39,13 @@ COMMON=(--model "${MODEL}" --method "${METHOD}" --attn-impl sdpa
 if [ "${METHOD}" = "reuse_v1" ]; then
   COMMON+=(--label-path "${LABEL}" --budget 32 --block-size 128 --segment-size 2048
            --sink-blocks 1 --local-blocks 2
-           --select-mode topp --top-p 0.9 --min-blocks 8 --max-blocks 64)
+           --select-mode "${SELECT_MODE}" --min-blocks "${MIN_BLOCKS}" --max-blocks 64)
+  if [ "${SELECT_MODE}" = "topk_ratio" ]; then
+    [ -n "${TOPK_RATIO}" ] || { echo "SELECT_MODE=topk_ratio requires TOPK_RATIO" >&2; exit 1; }
+    COMMON+=(--topk-ratio "${TOPK_RATIO}")
+  else
+    COMMON+=(--top-p "${TOP_P}")
+  fi
   [ "${LAST_Q_FULL}" = "1" ] && COMMON+=(--last-q-full)
 fi
 

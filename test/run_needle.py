@@ -224,6 +224,13 @@ def build_patch_kwargs(args) -> dict:
             dense_tail=args.dense_tail,
         )
     if m == "reuse_v1":
+        # 'topk_ratio' is only a label-config spelling: the kernel keys off topk_ratio
+        # being set, not the mode string, and the holder accepts 'topk'/'topp' only.
+        select_mode = args.select_mode
+        if select_mode == "topk_ratio":
+            if args.topk_ratio is None:
+                raise ValueError("--select-mode topk_ratio requires --topk-ratio")
+            select_mode = "topk"
         return dict(
             label_path=args.label_path,
             budget=args.budget,
@@ -232,10 +239,11 @@ def build_patch_kwargs(args) -> dict:
             sink_blocks=args.sink_blocks,
             local_blocks=args.local_blocks,
             causal=True,
-            select_mode=args.select_mode,
+            select_mode=select_mode,
             top_p=args.top_p,
             min_blocks=args.min_blocks,
             max_blocks=args.max_blocks,
+            topk_ratio=args.topk_ratio,
             last_q_full=args.last_q_full,
         )
     if m == "meanpooling":
@@ -342,8 +350,14 @@ def main() -> None:
                         help="last N sparse-head query rows attend densely (prefill); 0 disables")
     # reuse_v1
     parser.add_argument("--budget", type=int, default=32, help="reuse_v1 top-k block budget (16 or 32)")
-    parser.add_argument("--select-mode", default="topk", choices=["topk", "topp"],
-                        help="reuse_v1 block selection: 'topk' (fixed budget) or 'topp' (nucleus)")
+    parser.add_argument("--select-mode", default="topk", choices=["topk", "topp", "topk_ratio"],
+                        help="reuse_v1 block selection: 'topk' (fixed budget), 'topp' (nucleus), "
+                             "or 'topk_ratio' (dynamic per-q-block budget; alias of 'topk' with "
+                             "--topk-ratio set)")
+    parser.add_argument("--topk-ratio", type=float, default=None,
+                        help="reuse_v1: per-q-block budget = ceil(causal_valid_k * ratio) clamped "
+                             "to [--min-blocks, nkb]; overrides --budget. Must match the value the "
+                             "label was trained with (tkr=... in the label dirname)")
     parser.add_argument("--top-p", type=float, default=0.9,
                         help="reuse_v1 topp nucleus coverage (select_mode=topp)")
     parser.add_argument("--min-blocks", type=int, default=8,

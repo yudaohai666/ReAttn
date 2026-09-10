@@ -25,6 +25,10 @@ _REUSE_V1_LABEL_PATH = __import__('os').environ.get(
 # LLAMA_REUSE_V1_LAST_Q_FULL=0 to disable.
 _REUSE_V1_LAST_Q_FULL = __import__('os').environ.get('LLAMA_REUSE_V1_LAST_Q_FULL', '1') == '1'
 
+# reuse_v1 inference top_p for select_mode='topp'. Should match the top_p the
+# label was trained with. Override via LLAMA_REUSE_V1_TOP_P.
+_REUSE_V1_TOP_P = float(__import__('os').environ.get('LLAMA_REUSE_V1_TOP_P', '0.9'))
+
 # Label DIR for the DuoAttention model (holds full_attention_heads.tsv + config.json).
 # Override via LLAMA_DUO_LABEL_DIR; defaults to THIS repo's ckp/duo copy.
 _DUO_LABEL_DIR = __import__('os').environ.get(
@@ -206,7 +210,7 @@ llama_31_8b_reuse_v1_models = [
             local_blocks=2,
             causal=True,
             select_mode='topp',
-            top_p=0.9,
+            top_p=_REUSE_V1_TOP_P,
             min_blocks=8,
             max_blocks=64,
             last_q_full=_REUSE_V1_LAST_Q_FULL,

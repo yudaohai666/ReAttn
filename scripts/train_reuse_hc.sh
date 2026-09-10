@@ -66,7 +66,7 @@ target_sparsity=${9:-0.8}
 top_p=${10:-0.7}
 
 setting="hc-orig-rw=${reg_weight}-init=${initial_value}-sp=${target_sparsity}-tp=${top_p}-lr=${lr}-ctx=${ctx_len_min}_${ctx_len_max}-multi_passkey${num_passkey}-sp${sp_size}"
-exp_name="reuse_v1/${model_name}/${setting}"
+exp_name="reuse_v1/$(basename ${model_name})/${setting}"
 
 torchrun --nnodes 1 --nproc_per_node 8 \
     reuse_v1/train_reuse.py \
