@@ -1,72 +1,0 @@
-=========================================
-flashattn (dense) @ 128k
-=========================================
-09/09 19:30:53 - OpenCompass - INFO - Current exp folder: ./results/ruler/exps_llama_31_8b/flashattn_128k/20260909_193053
-09/09 19:30:53 - OpenCompass - WARNING - SlurmRunner is not used, so the partition argument is ignored.
-09/09 19:30:53 - OpenCompass - INFO - Partitioned into 8 tasks.
-  0%|          | 0/8 [00:00<?, ?it/s]                                       0%|          | 0/8 [00:00<?, ?it/s]                                       0%|          | 0/8 [00:00<?, ?it/s]                                       0%|          | 0/8 [00:00<?, ?it/s]                                       0%|          | 0/8 [00:00<?, ?it/s]                                       0%|          | 0/8 [00:00<?, ?it/s]                                       0%|          | 0/8 [00:00<?, ?it/s]                                       0%|          | 0/8 [00:00<?, ?it/s]                                       0%|          | 0/8 [00:00<?, ?it/s] 12%|█▎        | 1/8 [1:28:49<10:21:44, 5329.26s/it] 25%|██▌       | 2/8 [1:28:54<3:39:44, 2197.47s/it]  38%|███▊      | 3/8 [1:28:58<1:39:40, 1196.03s/it] 50%|█████     | 4/8 [1:29:46<49:30, 742.62s/it]    62%|██████▎   | 5/8 [1:30:18<24:19, 486.47s/it] 75%|███████▌  | 6/8 [1:31:20<11:24, 342.20s/it] 88%|████████▊ | 7/8 [1:33:50<04:39, 279.22s/it]100%|██████████| 8/8 [1:36:44<00:00, 245.86s/it]100%|██████████| 8/8 [1:36:44<00:00, 725.59s/it]
-launch OpenICLInfer[llama-3_1-8b-instruct-flashattn/ruler_cwe_128k_0,llama-3_1-8b-instruct-flashattn/ruler_fwe_128k_0,llama-3_1-8b-instruct-flashattn/ruler_niah_single_1_128k_0,llama-3_1-8b-instruct-flashattn/ruler_niah_single_2_128k_4,llama-3_1-8b-instruct-flashattn/ruler_niah_single_3_128k_4,llama-3_1-8b-instruct-flashattn/ruler_niah_multikey_1_128k_4,llama-3_1-8b-instruct-flashattn/ruler_niah_multikey_2_128k_4,llama-3_1-8b-instruct-flashattn/ruler_niah_multikey_3_128k_4,llama-3_1-8b-instruct-flashattn/ruler_niah_multivalue_128k_4,llama-3_1-8b-instruct-flashattn/ruler_niah_multiquery_128k_4,llama-3_1-8b-instruct-flashattn/ruler_qa_squad_128k_4,llama-3_1-8b-instruct-flashattn/ruler_qa_hotpotqa_128k_4,llama-3_1-8b-instruct-flashattn/ruler_vt_128k_4] on GPU 0
-launch OpenICLInfer[llama-3_1-8b-instruct-flashattn/ruler_cwe_128k_1,llama-3_1-8b-instruct-flashattn/ruler_fwe_128k_1,llama-3_1-8b-instruct-flashattn/ruler_niah_single_1_128k_1,llama-3_1-8b-instruct-flashattn/ruler_niah_single_2_128k_5,llama-3_1-8b-instruct-flashattn/ruler_niah_single_3_128k_5,llama-3_1-8b-instruct-flashattn/ruler_niah_multikey_1_128k_5,llama-3_1-8b-instruct-flashattn/ruler_niah_multikey_2_128k_5,llama-3_1-8b-instruct-flashattn/ruler_niah_multikey_3_128k_5,llama-3_1-8b-instruct-flashattn/ruler_niah_multivalue_128k_5,llama-3_1-8b-instruct-flashattn/ruler_niah_multiquery_128k_5,llama-3_1-8b-instruct-flashattn/ruler_qa_squad_128k_5,llama-3_1-8b-instruct-flashattn/ruler_qa_hotpotqa_128k_5,llama-3_1-8b-instruct-flashattn/ruler_vt_128k_5] on GPU 1
-launch OpenICLInfer[llama-3_1-8b-instruct-flashattn/ruler_cwe_128k_2,llama-3_1-8b-instruct-flashattn/ruler_fwe_128k_2,llama-3_1-8b-instruct-flashattn/ruler_niah_single_1_128k_2,llama-3_1-8b-instruct-flashattn/ruler_niah_single_2_128k_6,llama-3_1-8b-instruct-flashattn/ruler_niah_single_3_128k_6,llama-3_1-8b-instruct-flashattn/ruler_niah_multikey_1_128k_6,llama-3_1-8b-instruct-flashattn/ruler_niah_multikey_2_128k_6,llama-3_1-8b-instruct-flashattn/ruler_niah_multikey_3_128k_6,llama-3_1-8b-instruct-flashattn/ruler_niah_multivalue_128k_6,llama-3_1-8b-instruct-flashattn/ruler_niah_multiquery_128k_6,llama-3_1-8b-instruct-flashattn/ruler_qa_squad_128k_6,llama-3_1-8b-instruct-flashattn/ruler_qa_hotpotqa_128k_6,llama-3_1-8b-instruct-flashattn/ruler_vt_128k_6] on GPU 2
-launch OpenICLInfer[llama-3_1-8b-instruct-flashattn/ruler_cwe_128k_3,llama-3_1-8b-instruct-flashattn/ruler_fwe_128k_3,llama-3_1-8b-instruct-flashattn/ruler_niah_single_1_128k_3,llama-3_1-8b-instruct-flashattn/ruler_niah_single_2_128k_7,llama-3_1-8b-instruct-flashattn/ruler_niah_single_3_128k_7,llama-3_1-8b-instruct-flashattn/ruler_niah_multikey_1_128k_7,llama-3_1-8b-instruct-flashattn/ruler_niah_multikey_2_128k_7,llama-3_1-8b-instruct-flashattn/ruler_niah_multikey_3_128k_7,llama-3_1-8b-instruct-flashattn/ruler_niah_multivalue_128k_7,llama-3_1-8b-instruct-flashattn/ruler_niah_multiquery_128k_7,llama-3_1-8b-instruct-flashattn/ruler_qa_squad_128k_7,llama-3_1-8b-instruct-flashattn/ruler_qa_hotpotqa_128k_7,llama-3_1-8b-instruct-flashattn/ruler_vt_128k_7] on GPU 3
-launch OpenICLInfer[llama-3_1-8b-instruct-flashattn/ruler_cwe_128k_4,llama-3_1-8b-instruct-flashattn/ruler_fwe_128k_4,llama-3_1-8b-instruct-flashattn/ruler_niah_single_2_128k_0,llama-3_1-8b-instruct-flashattn/ruler_niah_single_3_128k_0,llama-3_1-8b-instruct-flashattn/ruler_niah_multikey_1_128k_0,llama-3_1-8b-instruct-flashattn/ruler_niah_multikey_2_128k_0,llama-3_1-8b-instruct-flashattn/ruler_niah_multikey_3_128k_0,llama-3_1-8b-instruct-flashattn/ruler_niah_multivalue_128k_0,llama-3_1-8b-instruct-flashattn/ruler_niah_multiquery_128k_0,llama-3_1-8b-instruct-flashattn/ruler_qa_squad_128k_0,llama-3_1-8b-instruct-flashattn/ruler_qa_hotpotqa_128k_0,llama-3_1-8b-instruct-flashattn/ruler_vt_128k_0] on GPU 4
-launch OpenICLInfer[llama-3_1-8b-instruct-flashattn/ruler_cwe_128k_5,llama-3_1-8b-instruct-flashattn/ruler_fwe_128k_5,llama-3_1-8b-instruct-flashattn/ruler_niah_single_2_128k_1,llama-3_1-8b-instruct-flashattn/ruler_niah_single_3_128k_1,llama-3_1-8b-instruct-flashattn/ruler_niah_multikey_1_128k_1,llama-3_1-8b-instruct-flashattn/ruler_niah_multikey_2_128k_1,llama-3_1-8b-instruct-flashattn/ruler_niah_multikey_3_128k_1,llama-3_1-8b-instruct-flashattn/ruler_niah_multivalue_128k_1,llama-3_1-8b-instruct-flashattn/ruler_niah_multiquery_128k_1,llama-3_1-8b-instruct-flashattn/ruler_qa_squad_128k_1,llama-3_1-8b-instruct-flashattn/ruler_qa_hotpotqa_128k_1,llama-3_1-8b-instruct-flashattn/ruler_vt_128k_1] on GPU 5
-launch OpenICLInfer[llama-3_1-8b-instruct-flashattn/ruler_cwe_128k_6,llama-3_1-8b-instruct-flashattn/ruler_fwe_128k_6,llama-3_1-8b-instruct-flashattn/ruler_niah_single_2_128k_2,llama-3_1-8b-instruct-flashattn/ruler_niah_single_3_128k_2,llama-3_1-8b-instruct-flashattn/ruler_niah_multikey_1_128k_2,llama-3_1-8b-instruct-flashattn/ruler_niah_multikey_2_128k_2,llama-3_1-8b-instruct-flashattn/ruler_niah_multikey_3_128k_2,llama-3_1-8b-instruct-flashattn/ruler_niah_multivalue_128k_2,llama-3_1-8b-instruct-flashattn/ruler_niah_multiquery_128k_2,llama-3_1-8b-instruct-flashattn/ruler_qa_squad_128k_2,llama-3_1-8b-instruct-flashattn/ruler_qa_hotpotqa_128k_2,llama-3_1-8b-instruct-flashattn/ruler_vt_128k_2] on GPU 6
-launch OpenICLInfer[llama-3_1-8b-instruct-flashattn/ruler_cwe_128k_7,llama-3_1-8b-instruct-flashattn/ruler_fwe_128k_7,llama-3_1-8b-instruct-flashattn/ruler_niah_single_2_128k_3,llama-3_1-8b-instruct-flashattn/ruler_niah_single_3_128k_3,llama-3_1-8b-instruct-flashattn/ruler_niah_multikey_1_128k_3,llama-3_1-8b-instruct-flashattn/ruler_niah_multikey_2_128k_3,llama-3_1-8b-instruct-flashattn/ruler_niah_multikey_3_128k_3,llama-3_1-8b-instruct-flashattn/ruler_niah_multivalue_128k_3,llama-3_1-8b-instruct-flashattn/ruler_niah_multiquery_128k_3,llama-3_1-8b-instruct-flashattn/ruler_qa_squad_128k_3,llama-3_1-8b-instruct-flashattn/ruler_qa_hotpotqa_128k_3,llama-3_1-8b-instruct-flashattn/ruler_vt_128k_3] on GPU 7
-09/09 21:07:38 - OpenCompass - INFO - Partitioned into 13 tasks.
-  0%|          | 0/13 [00:00<?, ?it/s]                                        0%|          | 0/13 [00:00<?, ?it/s]                                        0%|          | 0/13 [00:00<?, ?it/s]                                        0%|          | 0/13 [00:00<?, ?it/s]                                        0%|          | 0/13 [00:00<?, ?it/s]                                        0%|          | 0/13 [00:00<?, ?it/s]                                        0%|          | 0/13 [00:00<?, ?it/s]                                        0%|          | 0/13 [00:00<?, ?it/s]                                        0%|          | 0/13 [00:00<?, ?it/s]  8%|▊         | 1/13 [00:53<10:44, 53.74s/it]                                                8%|▊         | 1/13 [00:53<10:44, 53.74s/it] 15%|█▌        | 2/13 [00:54<04:08, 22.61s/it]                                               15%|█▌        | 2/13 [00:54<04:08, 22.61s/it] 23%|██▎       | 3/13 [00:57<02:14, 13.42s/it]                                               23%|██▎       | 3/13 [00:57<02:14, 13.42s/it] 31%|███       | 4/13 [00:57<01:15,  8.39s/it]                                               31%|███       | 4/13 [00:57<01:15,  8.39s/it] 38%|███▊      | 5/13 [00:57<00:43,  5.43s/it]                                               38%|███▊      | 5/13 [00:57<00:43,  5.43s/it] 46%|████▌     | 6/13 [00:58<00:26,  3.72s/it] 54%|█████▍    | 7/13 [01:04<00:27,  4.51s/it] 62%|██████▏   | 8/13 [01:10<00:25,  5.07s/it] 69%|██████▉   | 9/13 [01:17<00:21,  5.48s/it] 77%|███████▋  | 10/13 [01:21<00:15,  5.25s/it] 85%|████████▍ | 11/13 [01:21<00:07,  3.67s/it] 92%|█████████▏| 12/13 [01:22<00:02,  2.63s/it]100%|██████████| 13/13 [01:26<00:00,  3.24s/it]100%|██████████| 13/13 [01:26<00:00,  6.68s/it]
-launch OpenICLEval[llama-3_1-8b-instruct-flashattn/ruler_cwe_128k] on CPU 
-launch OpenICLEval[llama-3_1-8b-instruct-flashattn/ruler_fwe_128k] on CPU 
-launch OpenICLEval[llama-3_1-8b-instruct-flashattn/ruler_niah_single_1_128k] on CPU 
-launch OpenICLEval[llama-3_1-8b-instruct-flashattn/ruler_niah_single_2_128k] on CPU 
-launch OpenICLEval[llama-3_1-8b-instruct-flashattn/ruler_niah_single_3_128k] on CPU 
-launch OpenICLEval[llama-3_1-8b-instruct-flashattn/ruler_niah_multikey_1_128k] on CPU 
-launch OpenICLEval[llama-3_1-8b-instruct-flashattn/ruler_niah_multikey_2_128k] on CPU 
-launch OpenICLEval[llama-3_1-8b-instruct-flashattn/ruler_niah_multikey_3_128k] on CPU 
-launch OpenICLEval[llama-3_1-8b-instruct-flashattn/ruler_niah_multivalue_128k] on CPU 
-launch OpenICLEval[llama-3_1-8b-instruct-flashattn/ruler_niah_multiquery_128k] on CPU 
-launch OpenICLEval[llama-3_1-8b-instruct-flashattn/ruler_qa_squad_128k] on CPU 
-launch OpenICLEval[llama-3_1-8b-instruct-flashattn/ruler_qa_hotpotqa_128k] on CPU 
-launch OpenICLEval[llama-3_1-8b-instruct-flashattn/ruler_vt_128k] on CPU 
-dataset                     version    metric    mode      llama-3_1-8b-instruct-flashattn
---------------------------  ---------  --------  ------  ---------------------------------
-ruler_128k                  -          score     gen                                 74.20
-ruler_cwe_128k              2401f5     score     gen                                  0.10
-ruler_fwe_128k              2401f5     score     gen                                 59.83
-ruler_niah_single_1_128k    2401f5     score     gen                                100.00
-ruler_niah_single_2_128k    2401f5     score     gen                                 99.50
-ruler_niah_single_3_128k    2401f5     score     gen                                100.00
-ruler_niah_multikey_1_128k  2401f5     score     gen                                 97.50
-ruler_niah_multikey_2_128k  2401f5     score     gen                                 85.00
-ruler_niah_multikey_3_128k  2401f5     score     gen                                 58.00
-ruler_niah_multivalue_128k  2401f5     score     gen                                 97.62
-ruler_niah_multiquery_128k  2401f5     score     gen                                 98.12
-ruler_qa_squad_128k         2401f5     score     gen                                 73.00
-ruler_qa_hotpotqa_128k      2401f5     score     gen                                 38.50
-ruler_vt_128k               2401f5     score     gen                                 57.40
-09/09 21:09:05 - OpenCompass - INFO - write summary to /root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/eval/benchmarks/results/ruler/exps_llama_31_8b/flashattn_128k/20260909_193053/summary/summary_20260909_193053.txt
-09/09 21:09:05 - OpenCompass - INFO - write csv to /root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/eval/benchmarks/results/ruler/exps_llama_31_8b/flashattn_128k/20260909_193053/summary/summary_20260909_193053.csv
-
-
-The markdown format results is as below:
-
-| dataset | version | metric | mode | llama-3_1-8b-instruct-flashattn |
-|----- | ----- | ----- | ----- | -----|
-| ruler_128k | - | score | gen | 74.20 |
-| ruler_cwe_128k | 2401f5 | score | gen | 0.10 |
-| ruler_fwe_128k | 2401f5 | score | gen | 59.83 |
-| ruler_niah_single_1_128k | 2401f5 | score | gen | 100.00 |
-| ruler_niah_single_2_128k | 2401f5 | score | gen | 99.50 |
-| ruler_niah_single_3_128k | 2401f5 | score | gen | 100.00 |
-| ruler_niah_multikey_1_128k | 2401f5 | score | gen | 97.50 |
-| ruler_niah_multikey_2_128k | 2401f5 | score | gen | 85.00 |
-| ruler_niah_multikey_3_128k | 2401f5 | score | gen | 58.00 |
-| ruler_niah_multivalue_128k | 2401f5 | score | gen | 97.62 |
-| ruler_niah_multiquery_128k | 2401f5 | score | gen | 98.12 |
-| ruler_qa_squad_128k | 2401f5 | score | gen | 73.00 |
-| ruler_qa_hotpotqa_128k | 2401f5 | score | gen | 38.50 |
-| ruler_vt_128k | 2401f5 | score | gen | 57.40 |
-
-09/09 21:09:05 - OpenCompass - INFO - write markdown summary to /root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/eval/benchmarks/results/ruler/exps_llama_31_8b/flashattn_128k/20260909_193053/summary/summary_20260909_193053.md
---- 128k exit=0 ---
-=== done ===

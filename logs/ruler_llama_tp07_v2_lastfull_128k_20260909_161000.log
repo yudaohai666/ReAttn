@@ -1,72 +1,0 @@
-=========================================
-reuse_v1 tp=0.7 (v2 label) last_q_full=1 @ 128k
-=========================================
-09/09 16:10:31 - OpenCompass - INFO - Current exp folder: ./results/ruler/exps_llama_31_8b/reuse_v1_lastfull_tp0.7_v2/20260909_161031
-09/09 16:10:31 - OpenCompass - WARNING - SlurmRunner is not used, so the partition argument is ignored.
-09/09 16:10:31 - OpenCompass - INFO - Partitioned into 8 tasks.
-  0%|          | 0/8 [00:00<?, ?it/s]                                       0%|          | 0/8 [00:00<?, ?it/s]                                       0%|          | 0/8 [00:00<?, ?it/s]                                       0%|          | 0/8 [00:00<?, ?it/s]                                       0%|          | 0/8 [00:00<?, ?it/s]                                       0%|          | 0/8 [00:00<?, ?it/s]                                       0%|          | 0/8 [00:00<?, ?it/s]                                       0%|          | 0/8 [00:00<?, ?it/s]                                       0%|          | 0/8 [00:01<?, ?it/s] 12%|█▎        | 1/8 [1:05:58<7:41:48, 3958.40s/it] 25%|██▌       | 2/8 [1:06:32<2:44:58, 1649.76s/it] 38%|███▊      | 3/8 [1:07:25<1:16:43, 920.69s/it]  50%|█████     | 4/8 [1:07:30<37:16, 559.16s/it]   62%|██████▎   | 5/8 [1:07:30<17:52, 357.61s/it] 75%|███████▌  | 6/8 [1:10:32<09:55, 297.91s/it] 88%|████████▊ | 7/8 [1:11:38<03:42, 222.29s/it]100%|██████████| 8/8 [1:14:22<00:00, 203.51s/it]100%|██████████| 8/8 [1:14:22<00:00, 557.79s/it]
-launch OpenICLInfer[llama-3_1-8b-instruct-reuse-v1/ruler_cwe_128k_0,llama-3_1-8b-instruct-reuse-v1/ruler_fwe_128k_0,llama-3_1-8b-instruct-reuse-v1/ruler_niah_single_1_128k_0,llama-3_1-8b-instruct-reuse-v1/ruler_niah_single_2_128k_4,llama-3_1-8b-instruct-reuse-v1/ruler_niah_single_3_128k_4,llama-3_1-8b-instruct-reuse-v1/ruler_niah_multikey_1_128k_4,llama-3_1-8b-instruct-reuse-v1/ruler_niah_multikey_2_128k_4,llama-3_1-8b-instruct-reuse-v1/ruler_niah_multikey_3_128k_4,llama-3_1-8b-instruct-reuse-v1/ruler_niah_multivalue_128k_4,llama-3_1-8b-instruct-reuse-v1/ruler_niah_multiquery_128k_4,llama-3_1-8b-instruct-reuse-v1/ruler_qa_squad_128k_4,llama-3_1-8b-instruct-reuse-v1/ruler_qa_hotpotqa_128k_4,llama-3_1-8b-instruct-reuse-v1/ruler_vt_128k_4] on GPU 0
-launch OpenICLInfer[llama-3_1-8b-instruct-reuse-v1/ruler_cwe_128k_1,llama-3_1-8b-instruct-reuse-v1/ruler_fwe_128k_1,llama-3_1-8b-instruct-reuse-v1/ruler_niah_single_1_128k_1,llama-3_1-8b-instruct-reuse-v1/ruler_niah_single_2_128k_5,llama-3_1-8b-instruct-reuse-v1/ruler_niah_single_3_128k_5,llama-3_1-8b-instruct-reuse-v1/ruler_niah_multikey_1_128k_5,llama-3_1-8b-instruct-reuse-v1/ruler_niah_multikey_2_128k_5,llama-3_1-8b-instruct-reuse-v1/ruler_niah_multikey_3_128k_5,llama-3_1-8b-instruct-reuse-v1/ruler_niah_multivalue_128k_5,llama-3_1-8b-instruct-reuse-v1/ruler_niah_multiquery_128k_5,llama-3_1-8b-instruct-reuse-v1/ruler_qa_squad_128k_5,llama-3_1-8b-instruct-reuse-v1/ruler_qa_hotpotqa_128k_5,llama-3_1-8b-instruct-reuse-v1/ruler_vt_128k_5] on GPU 1
-launch OpenICLInfer[llama-3_1-8b-instruct-reuse-v1/ruler_cwe_128k_2,llama-3_1-8b-instruct-reuse-v1/ruler_fwe_128k_2,llama-3_1-8b-instruct-reuse-v1/ruler_niah_single_1_128k_2,llama-3_1-8b-instruct-reuse-v1/ruler_niah_single_2_128k_6,llama-3_1-8b-instruct-reuse-v1/ruler_niah_single_3_128k_6,llama-3_1-8b-instruct-reuse-v1/ruler_niah_multikey_1_128k_6,llama-3_1-8b-instruct-reuse-v1/ruler_niah_multikey_2_128k_6,llama-3_1-8b-instruct-reuse-v1/ruler_niah_multikey_3_128k_6,llama-3_1-8b-instruct-reuse-v1/ruler_niah_multivalue_128k_6,llama-3_1-8b-instruct-reuse-v1/ruler_niah_multiquery_128k_6,llama-3_1-8b-instruct-reuse-v1/ruler_qa_squad_128k_6,llama-3_1-8b-instruct-reuse-v1/ruler_qa_hotpotqa_128k_6,llama-3_1-8b-instruct-reuse-v1/ruler_vt_128k_6] on GPU 2
-launch OpenICLInfer[llama-3_1-8b-instruct-reuse-v1/ruler_cwe_128k_3,llama-3_1-8b-instruct-reuse-v1/ruler_fwe_128k_3,llama-3_1-8b-instruct-reuse-v1/ruler_niah_single_1_128k_3,llama-3_1-8b-instruct-reuse-v1/ruler_niah_single_2_128k_7,llama-3_1-8b-instruct-reuse-v1/ruler_niah_single_3_128k_7,llama-3_1-8b-instruct-reuse-v1/ruler_niah_multikey_1_128k_7,llama-3_1-8b-instruct-reuse-v1/ruler_niah_multikey_2_128k_7,llama-3_1-8b-instruct-reuse-v1/ruler_niah_multikey_3_128k_7,llama-3_1-8b-instruct-reuse-v1/ruler_niah_multivalue_128k_7,llama-3_1-8b-instruct-reuse-v1/ruler_niah_multiquery_128k_7,llama-3_1-8b-instruct-reuse-v1/ruler_qa_squad_128k_7,llama-3_1-8b-instruct-reuse-v1/ruler_qa_hotpotqa_128k_7,llama-3_1-8b-instruct-reuse-v1/ruler_vt_128k_7] on GPU 3
-launch OpenICLInfer[llama-3_1-8b-instruct-reuse-v1/ruler_cwe_128k_4,llama-3_1-8b-instruct-reuse-v1/ruler_fwe_128k_4,llama-3_1-8b-instruct-reuse-v1/ruler_niah_single_2_128k_0,llama-3_1-8b-instruct-reuse-v1/ruler_niah_single_3_128k_0,llama-3_1-8b-instruct-reuse-v1/ruler_niah_multikey_1_128k_0,llama-3_1-8b-instruct-reuse-v1/ruler_niah_multikey_2_128k_0,llama-3_1-8b-instruct-reuse-v1/ruler_niah_multikey_3_128k_0,llama-3_1-8b-instruct-reuse-v1/ruler_niah_multivalue_128k_0,llama-3_1-8b-instruct-reuse-v1/ruler_niah_multiquery_128k_0,llama-3_1-8b-instruct-reuse-v1/ruler_qa_squad_128k_0,llama-3_1-8b-instruct-reuse-v1/ruler_qa_hotpotqa_128k_0,llama-3_1-8b-instruct-reuse-v1/ruler_vt_128k_0] on GPU 4
-launch OpenICLInfer[llama-3_1-8b-instruct-reuse-v1/ruler_cwe_128k_5,llama-3_1-8b-instruct-reuse-v1/ruler_fwe_128k_5,llama-3_1-8b-instruct-reuse-v1/ruler_niah_single_2_128k_1,llama-3_1-8b-instruct-reuse-v1/ruler_niah_single_3_128k_1,llama-3_1-8b-instruct-reuse-v1/ruler_niah_multikey_1_128k_1,llama-3_1-8b-instruct-reuse-v1/ruler_niah_multikey_2_128k_1,llama-3_1-8b-instruct-reuse-v1/ruler_niah_multikey_3_128k_1,llama-3_1-8b-instruct-reuse-v1/ruler_niah_multivalue_128k_1,llama-3_1-8b-instruct-reuse-v1/ruler_niah_multiquery_128k_1,llama-3_1-8b-instruct-reuse-v1/ruler_qa_squad_128k_1,llama-3_1-8b-instruct-reuse-v1/ruler_qa_hotpotqa_128k_1,llama-3_1-8b-instruct-reuse-v1/ruler_vt_128k_1] on GPU 5
-launch OpenICLInfer[llama-3_1-8b-instruct-reuse-v1/ruler_cwe_128k_6,llama-3_1-8b-instruct-reuse-v1/ruler_fwe_128k_6,llama-3_1-8b-instruct-reuse-v1/ruler_niah_single_2_128k_2,llama-3_1-8b-instruct-reuse-v1/ruler_niah_single_3_128k_2,llama-3_1-8b-instruct-reuse-v1/ruler_niah_multikey_1_128k_2,llama-3_1-8b-instruct-reuse-v1/ruler_niah_multikey_2_128k_2,llama-3_1-8b-instruct-reuse-v1/ruler_niah_multikey_3_128k_2,llama-3_1-8b-instruct-reuse-v1/ruler_niah_multivalue_128k_2,llama-3_1-8b-instruct-reuse-v1/ruler_niah_multiquery_128k_2,llama-3_1-8b-instruct-reuse-v1/ruler_qa_squad_128k_2,llama-3_1-8b-instruct-reuse-v1/ruler_qa_hotpotqa_128k_2,llama-3_1-8b-instruct-reuse-v1/ruler_vt_128k_2] on GPU 6
-launch OpenICLInfer[llama-3_1-8b-instruct-reuse-v1/ruler_cwe_128k_7,llama-3_1-8b-instruct-reuse-v1/ruler_fwe_128k_7,llama-3_1-8b-instruct-reuse-v1/ruler_niah_single_2_128k_3,llama-3_1-8b-instruct-reuse-v1/ruler_niah_single_3_128k_3,llama-3_1-8b-instruct-reuse-v1/ruler_niah_multikey_1_128k_3,llama-3_1-8b-instruct-reuse-v1/ruler_niah_multikey_2_128k_3,llama-3_1-8b-instruct-reuse-v1/ruler_niah_multikey_3_128k_3,llama-3_1-8b-instruct-reuse-v1/ruler_niah_multivalue_128k_3,llama-3_1-8b-instruct-reuse-v1/ruler_niah_multiquery_128k_3,llama-3_1-8b-instruct-reuse-v1/ruler_qa_squad_128k_3,llama-3_1-8b-instruct-reuse-v1/ruler_qa_hotpotqa_128k_3,llama-3_1-8b-instruct-reuse-v1/ruler_vt_128k_3] on GPU 7
-09/09 17:24:54 - OpenCompass - INFO - Partitioned into 13 tasks.
-  0%|          | 0/13 [00:00<?, ?it/s]                                        0%|          | 0/13 [00:00<?, ?it/s]                                        0%|          | 0/13 [00:00<?, ?it/s]                                        0%|          | 0/13 [00:00<?, ?it/s]                                        0%|          | 0/13 [00:00<?, ?it/s]                                        0%|          | 0/13 [00:00<?, ?it/s]                                        0%|          | 0/13 [00:00<?, ?it/s]                                        0%|          | 0/13 [00:00<?, ?it/s]                                        0%|          | 0/13 [00:01<?, ?it/s]  8%|▊         | 1/13 [00:29<05:57, 29.76s/it]                                                8%|▊         | 1/13 [00:29<05:57, 29.76s/it] 15%|█▌        | 2/13 [00:31<02:23, 13.01s/it]                                               15%|█▌        | 2/13 [00:31<02:23, 13.01s/it] 23%|██▎       | 3/13 [00:33<01:20,  8.04s/it]                                               23%|██▎       | 3/13 [00:33<01:20,  8.04s/it] 31%|███       | 4/13 [00:33<00:46,  5.19s/it]                                               31%|███       | 4/13 [00:33<00:46,  5.19s/it]                                               38%|███▊      | 5/13 [00:34<00:41,  5.19s/it] 46%|████▌     | 6/13 [00:34<00:17,  2.55s/it] 54%|█████▍    | 7/13 [00:38<00:18,  3.06s/it] 62%|██████▏   | 8/13 [00:47<00:23,  4.62s/it] 69%|██████▉   | 9/13 [00:53<00:19,  4.91s/it] 77%|███████▋  | 10/13 [00:56<00:13,  4.59s/it] 85%|████████▍ | 11/13 [00:58<00:07,  3.71s/it] 92%|█████████▏| 12/13 [00:58<00:02,  2.75s/it]100%|██████████| 13/13 [01:03<00:00,  3.42s/it]100%|██████████| 13/13 [01:03<00:00,  4.92s/it]
-launch OpenICLEval[llama-3_1-8b-instruct-reuse-v1/ruler_cwe_128k] on CPU 
-launch OpenICLEval[llama-3_1-8b-instruct-reuse-v1/ruler_fwe_128k] on CPU 
-launch OpenICLEval[llama-3_1-8b-instruct-reuse-v1/ruler_niah_single_1_128k] on CPU 
-launch OpenICLEval[llama-3_1-8b-instruct-reuse-v1/ruler_niah_single_2_128k] on CPU 
-launch OpenICLEval[llama-3_1-8b-instruct-reuse-v1/ruler_niah_single_3_128k] on CPU 
-launch OpenICLEval[llama-3_1-8b-instruct-reuse-v1/ruler_niah_multikey_1_128k] on CPU 
-launch OpenICLEval[llama-3_1-8b-instruct-reuse-v1/ruler_niah_multikey_2_128k] on CPU 
-launch OpenICLEval[llama-3_1-8b-instruct-reuse-v1/ruler_niah_multikey_3_128k] on CPU 
-launch OpenICLEval[llama-3_1-8b-instruct-reuse-v1/ruler_niah_multivalue_128k] on CPU 
-launch OpenICLEval[llama-3_1-8b-instruct-reuse-v1/ruler_niah_multiquery_128k] on CPU 
-launch OpenICLEval[llama-3_1-8b-instruct-reuse-v1/ruler_qa_squad_128k] on CPU 
-launch OpenICLEval[llama-3_1-8b-instruct-reuse-v1/ruler_qa_hotpotqa_128k] on CPU 
-launch OpenICLEval[llama-3_1-8b-instruct-reuse-v1/ruler_vt_128k] on CPU 
-dataset                     version    metric    mode      llama-3_1-8b-instruct-reuse-v1
---------------------------  ---------  --------  ------  --------------------------------
-ruler_128k                  -          score     gen                                68.81
-ruler_cwe_128k              2401f5     score     gen                                 0.10
-ruler_fwe_128k              2401f5     score     gen                                52.33
-ruler_niah_single_1_128k    2401f5     score     gen                                95.31
-ruler_niah_single_2_128k    2401f5     score     gen                               100.00
-ruler_niah_single_3_128k    2401f5     score     gen                               100.00
-ruler_niah_multikey_1_128k  2401f5     score     gen                                93.00
-ruler_niah_multikey_2_128k  2401f5     score     gen                                63.00
-ruler_niah_multikey_3_128k  2401f5     score     gen                                43.50
-ruler_niah_multivalue_128k  2401f5     score     gen                                88.00
-ruler_niah_multiquery_128k  2401f5     score     gen                                86.75
-ruler_qa_squad_128k         2401f5     score     gen                                61.00
-ruler_qa_hotpotqa_128k      2401f5     score     gen                                37.50
-ruler_vt_128k               2401f5     score     gen                                74.10
-09/09 17:25:58 - OpenCompass - INFO - write summary to /root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/eval/benchmarks/results/ruler/exps_llama_31_8b/reuse_v1_lastfull_tp0.7_v2/20260909_161031/summary/summary_20260909_161031.txt
-09/09 17:25:58 - OpenCompass - INFO - write csv to /root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/eval/benchmarks/results/ruler/exps_llama_31_8b/reuse_v1_lastfull_tp0.7_v2/20260909_161031/summary/summary_20260909_161031.csv
-
-
-The markdown format results is as below:
-
-| dataset | version | metric | mode | llama-3_1-8b-instruct-reuse-v1 |
-|----- | ----- | ----- | ----- | -----|
-| ruler_128k | - | score | gen | 68.81 |
-| ruler_cwe_128k | 2401f5 | score | gen | 0.10 |
-| ruler_fwe_128k | 2401f5 | score | gen | 52.33 |
-| ruler_niah_single_1_128k | 2401f5 | score | gen | 95.31 |
-| ruler_niah_single_2_128k | 2401f5 | score | gen | 100.00 |
-| ruler_niah_single_3_128k | 2401f5 | score | gen | 100.00 |
-| ruler_niah_multikey_1_128k | 2401f5 | score | gen | 93.00 |
-| ruler_niah_multikey_2_128k | 2401f5 | score | gen | 63.00 |
-| ruler_niah_multikey_3_128k | 2401f5 | score | gen | 43.50 |
-| ruler_niah_multivalue_128k | 2401f5 | score | gen | 88.00 |
-| ruler_niah_multiquery_128k | 2401f5 | score | gen | 86.75 |
-| ruler_qa_squad_128k | 2401f5 | score | gen | 61.00 |
-| ruler_qa_hotpotqa_128k | 2401f5 | score | gen | 37.50 |
-| ruler_vt_128k | 2401f5 | score | gen | 74.10 |
-
-09/09 17:25:58 - OpenCompass - INFO - write markdown summary to /root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/eval/benchmarks/results/ruler/exps_llama_31_8b/reuse_v1_lastfull_tp0.7_v2/20260909_161031/summary/summary_20260909_161031.md
---- 128k exit=0 ---
-=== done ===
