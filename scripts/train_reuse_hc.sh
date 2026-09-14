@@ -30,7 +30,7 @@
 #   target_sparsity is used ONLY at export (top-k cutoff), not during training.
 #
 # Usage:
-#   bash scripts/train_reuse_hc.sh <model_path> <ctx_len_min> <ctx_len_max> <lr> <num_passkey> [sp_size] [reg_weight] [initial_value] [target_sparsity] [top_p]
+#   bash scripts/train_reuse_hc.sh <model_path> <ctx_len_min> <ctx_len_max> <lr> <num_passkey> [sp_size] [reg_weight] [initial_value] [target_sparsity] [top_p] [min_blocks] [max_blocks]
 #
 #   sp_size          Ulysses SP group size. Default 8.
 #   reg_weight       L0 penalty coefficient. Default 0.1.
@@ -39,6 +39,10 @@
 #   top_p            Nucleus coverage for topp block selection. Default 0.7.
 #                    MUST match the inference-time top_p, or the exported head
 #                    labels will not transfer.
+#   min_blocks       topp lower bound on selected blocks per q-block. Default 8.
+#   max_blocks       topp upper bound / max_sel cache width. Default 64.
+#                    min_blocks/max_blocks are encoded in the exp_name only when
+#                    they differ from the 8/64 default, so old runs keep their path.
 #
 #   Layer 0 is forced all-anchor (log_alpha frozen at +10, requires_grad=False),
 #   so it always fills every kv-head slot of the anchor cache. It is excluded
@@ -49,6 +53,10 @@ set -euo pipefail
 export TOKENIZERS_PARALLELISM=true
 export OMP_NUM_THREADS=8
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export http_proxy=http://agent.baidu.com:8891
+export https_proxy=http://agent.baidu.com:8891
+# No wandb API key in this env; log offline so training never blocks on login.
+export WANDB_MODE=${WANDB_MODE:-offline}
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -64,12 +72,35 @@ reg_weight=${7:-0.1}
 initial_value=${8:-0.0}
 target_sparsity=${9:-0.8}
 top_p=${10:-0.7}
+min_blocks=${11:-8}
+max_blocks=${12:-64}
 
 setting="hc-orig-rw=${reg_weight}-init=${initial_value}-sp=${target_sparsity}-tp=${top_p}-lr=${lr}-ctx=${ctx_len_min}_${ctx_len_max}-multi_passkey${num_passkey}-sp${sp_size}"
+# Only tag the path when block bounds differ from the historical 8/64 default,
+# so pre-existing labels keep their original path.
+if [ "${min_blocks}" != "8" ] || [ "${max_blocks}" != "64" ]; then
+  setting="${setting}-mb${min_blocks}-xb${max_blocks}"
+fi
+# Optional explicit tag suffix. Use to force a distinct path even when block
+# bounds equal the 8/64 default (which otherwise adds no suffix), e.g.
+# EXP_TAG=mb8-xb64 to label a fresh 8/64 reproduction without colliding with
+# the historical un-suffixed path.
+if [ -n "${EXP_TAG:-}" ]; then
+  setting="${setting}-${EXP_TAG}"
+fi
 exp_name="reuse_v1/$(basename ${model_name})/${setting}"
 
-torchrun --nnodes 1 --nproc_per_node 8 \
+# Opt-in resume: set RESUME=1 to continue from <output_dir>/*_latest checkpoints.
+# Off by default so a fresh launch never accidentally picks up a stale checkpoint.
+resume_flag=()
+if [ "${RESUME:-0}" = "1" ]; then
+  resume_flag=(--resume)
+fi
+
+TORCHRUN="${REPO_ROOT}/.venv/bin/torchrun"
+"${TORCHRUN}" --nnodes 1 --nproc_per_node 8 \
     reuse_v1/train_reuse.py \
+    "${resume_flag[@]}" \
     --model_name "${model_name}" \
     --batch_size 1 \
     --max_length "${ctx_len_max}" \
@@ -83,8 +114,8 @@ torchrun --nnodes 1 --nproc_per_node 8 \
     --target_sparsity "${target_sparsity}" \
     --select_mode topp \
     --top_p "${top_p}" \
-    --min_blocks 8 \
-    --max_blocks 64 \
+    --min_blocks "${min_blocks}" \
+    --max_blocks "${max_blocks}" \
     --min_needle_depth_ratio 0.05 \
     --max_needle_depth_ratio 0.95 \
     --context_length_min "${ctx_len_min}" \

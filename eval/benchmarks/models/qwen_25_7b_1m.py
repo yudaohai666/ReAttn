@@ -157,6 +157,7 @@ qwen2_5_7b_1m_reuse_v1_models = [
             min_blocks=8,
             max_blocks=64,
             last_q_full=_REUSE_V1_LAST_Q_FULL,
+            per_head_topp=False,
         ),
         model_kwargs=dict(torch_dtype='torch.bfloat16'),
         max_out_len=2048,

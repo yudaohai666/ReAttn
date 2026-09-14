@@ -12,6 +12,8 @@ _REUSE_V1_LABEL_PATH = __import__('os').environ.get(
 
 _REUSE_V1_LAST_Q_FULL = __import__('os').environ.get('QWEN3_REUSE_V1_LAST_Q_FULL', '1') == '1'
 _REUSE_V1_TOP_P = float(__import__('os').environ.get('QWEN3_REUSE_V1_TOP_P', '0.7'))
+_REUSE_V1_MIN_BLOCKS = int(__import__('os').environ.get('QWEN3_REUSE_V1_MIN_BLOCKS', '8'))
+_REUSE_V1_MAX_BLOCKS = int(__import__('os').environ.get('QWEN3_REUSE_V1_MAX_BLOCKS', '64'))
 
 api_meta_template = dict(
     round=[
@@ -52,9 +54,10 @@ qwen3_8b_reuse_v1_models = [
             causal=True,
             select_mode='topp',
             top_p=_REUSE_V1_TOP_P,
-            min_blocks=8,
-            max_blocks=64,
+            min_blocks=_REUSE_V1_MIN_BLOCKS,
+            max_blocks=_REUSE_V1_MAX_BLOCKS,
             last_q_full=_REUSE_V1_LAST_Q_FULL,
+            per_head_topp=False,
         ),
         model_kwargs=dict(torch_dtype='torch.bfloat16'),
         max_out_len=2048,

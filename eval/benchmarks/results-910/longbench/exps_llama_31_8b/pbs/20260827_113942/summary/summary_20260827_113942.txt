@@ -1,0 +1,87 @@
+20260827_113942
+tabulate format
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+dataset                       version    metric         mode    llama-3_1-8b-instruct-pbs
+----------------------------  ---------  -------------  ------  ---------------------------
+longbench                     -          naive_average  gen     38.95
+longbench_zh                  -          naive_average  gen     35.76
+longbench_en                  -          naive_average  gen     38.79
+                              -          -              -       -
+longbench_single-document-qa  -          score          gen     47.96
+longbench_multi-document-qa   -          score          gen     43.29
+longbench_summarization       -          score          gen     26.06
+longbench_few-shot-learning   -          score          gen     28.47
+longbench_synthetic-tasks     -          score          gen     63.88
+longbench_code-completion     -          score          gen     24.05
+$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+
+-------------------------------------------------------------------------------------------------------------------------------- THIS IS A DIVIDER --------------------------------------------------------------------------------------------------------------------------------
+
+csv format
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+dataset,version,metric,mode,llama-3_1-8b-instruct-pbs
+longbench,-,naive_average,gen,38.95
+longbench_zh,-,naive_average,gen,35.76
+longbench_en,-,naive_average,gen,38.79
+,-,-,-,-
+longbench_single-document-qa,-,score,gen,47.96
+longbench_multi-document-qa,-,score,gen,43.29
+longbench_summarization,-,score,gen,26.06
+longbench_few-shot-learning,-,score,gen,28.47
+longbench_synthetic-tasks,-,score,gen,63.88
+longbench_code-completion,-,score,gen,24.05
+$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+
+markdown format
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+| dataset | version | metric | mode | llama-3_1-8b-instruct-pbs |
+|----- | ----- | ----- | ----- | -----|
+| longbench | - | naive_average | gen | 38.95 |
+| longbench_zh | - | naive_average | gen | 35.76 |
+| longbench_en | - | naive_average | gen | 38.79 |
+|  | - | - | - | - |
+| longbench_single-document-qa | - | score | gen | 47.96 |
+| longbench_multi-document-qa | - | score | gen | 43.29 |
+| longbench_summarization | - | score | gen | 26.06 |
+| longbench_few-shot-learning | - | score | gen | 28.47 |
+| longbench_synthetic-tasks | - | score | gen | 63.88 |
+| longbench_code-completion | - | score | gen | 24.05 |
+
+$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+-------------------------------------------------------------------------------------------------------------------------------- THIS IS A DIVIDER --------------------------------------------------------------------------------------------------------------------------------
+
+raw format
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+-------------------------------
+Model: llama-3_1-8b-instruct-pbs
+LongBench_2wikimqa: {'score': 49.799391781130865}
+LongBench_hotpotqa: {'score': 57.16883692073323}
+LongBench_musique: {'score': 31.699977926515565}
+LongBench_multifieldqa_en: {'score': 53.882039732942154}
+LongBench_multifieldqa_zh: {'score': 60.18538451206711}
+LongBench_narrativeqa: {'score': 31.057535231796056}
+LongBench_qasper: {'score': 46.70359345976054}
+LongBench_triviaqa: {'score': 90.44841269841271}
+LongBench_gov_report: {'score': 34.32053481956005}
+LongBench_qmsum: {'score': 25.34551861268256}
+LongBench_vcsum: {'score': 17.520306747800962}
+LongBench_dureader: {'score': 34.47716134897604}
+LongBench_lcc: {'score': 23.798000000000002}
+LongBench_repobench-p: {'score': 24.294}
+LongBench_passage_retrieval_en: {'score': 99.5}
+LongBench_passage_retrieval_zh: {'score': 88.53333333333333}
+LongBench_passage_count: {'score': 3.6145833333333335}
+LongBench_trec: {'score': 6.5}
+LongBench_lsht: {'score': 1.5}
+LongBench_multi_news: {'score': 27.040975412111912}
+LongBench_samsum: {'score': 15.438788647177521}
+longbench_single-document-qa: {'score': 47.95713823414147, 'naive_average': 47.95713823414147}
+longbench_multi-document-qa: {'score': 43.286341994338926, 'naive_average': 43.286341994338926}
+longbench_summarization: {'score': 26.05683389803887, 'naive_average': 26.05683389803887}
+longbench_few-shot-learning: {'score': 28.471800336397557, 'naive_average': 28.471800336397557}
+longbench_synthetic-tasks: {'score': 63.88263888888889, 'naive_average': 63.88263888888889}
+longbench_code-completion: {'score': 24.046, 'naive_average': 24.046}
+longbench_zh: {'score': 35.75831227745392, 'naive_average': 35.75831227745392}
+longbench_en: {'score': 38.788261786009784, 'naive_average': 38.788261786009784}
+longbench: {'score': 38.950125558634284, 'naive_average': 38.950125558634284}
+$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$

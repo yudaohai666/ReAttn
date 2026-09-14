@@ -30,7 +30,7 @@ class ReuseV1Holder:
                  sink_blocks=1, local_blocks=2, causal=True,
                  select_mode='topk', top_p=0.9, min_blocks=8, max_blocks=64,
                  topk_ratio=None,
-                 last_q_full=False):
+                 last_q_full=False, per_head_topp=False):
         self.budget = budget
         self.block_size = block_size
         self.segment_size = segment_size
@@ -48,6 +48,9 @@ class ReuseV1Holder:
         # If True, sparse kv-heads' last query block attends to full KV cache
         # (dense attention), improving recall for retrieval tasks (e.g. NIAH).
         self.last_q_full = last_q_full
+        # topp only: if True, each q-head in a GQA group selects its own nucleus
+        # (no amax over G). Costs G x IndexCache memory. No effect in topk mode.
+        self.per_head_topp = per_head_topp
         # Filled in by get_reuse_v1_prefill.
         self.label = None            # (num_layers, Hkv) bool tensor on device
         self.num_layers = None
@@ -113,7 +116,9 @@ def reuse_v1_prefill(query_states, key_states, value_states,
         max_sel = _resolve_max_sel(holder.select_mode, holder.budget, holder.max_blocks, nqb,
                                    sink_blocks=holder.sink_blocks, local_blocks=holder.local_blocks,
                                    topk_ratio=holder.topk_ratio)
-        holder.cache = IndexCache(b, nqb, Hkv, max_sel, dev)
+        per_head = holder.per_head_topp and holder.select_mode == 'topp'
+        holder.cache = IndexCache(b, nqb, Hkv, max_sel, dev,
+                                  per_head=per_head, G=G)
         holder._bound = (b, nqb, Hkv)
     else:
         if holder.cache is None:
@@ -135,6 +140,8 @@ def reuse_v1_prefill(query_states, key_states, value_states,
         min_blocks=holder.min_blocks, max_blocks=holder.max_blocks,
         topk_ratio=holder.topk_ratio,
         last_q_full=holder.last_q_full,
+        per_head_topp=holder.per_head_topp,
+        layer_idx=layer_idx,
     )
 
 
@@ -142,7 +149,7 @@ def get_reuse_v1_prefill(label_path, budget=32, block_size=128, segment_size=204
                          sink_blocks=1, local_blocks=2, causal=True, device='cuda',
                          select_mode='topk', top_p=0.9, min_blocks=8, max_blocks=64,
                          topk_ratio=None,
-                         last_q_full=False):
+                         last_q_full=False, per_head_topp=False):
     """Build a per-model reuse_v1 prefill callable bound to a fresh holder.
 
     ``select_mode='topp'`` switches block selection from fixed top-k budget to
@@ -153,16 +160,23 @@ def get_reuse_v1_prefill(label_path, budget=32, block_size=128, segment_size=204
     ``last_q_full=True``: the last query block of all sparse kv-heads attends to
     the full KV cache (dense attention) instead of the top-k block selection.
     Improves retrieval recall (e.g. NIAH) at a small extra cost per layer.
+
+    ``per_head_topp=True`` (topp only): each q-head in a GQA group selects its own
+    nucleus instead of sharing an amax-aggregated selection. Costs G x IndexCache
+    memory; no effect in topk mode.
+
+    Nucleus coverage denominator is the true total attention mass over all causal
+    k-blocks (FlexPrefill-style), so top_p is faithful to the attention mass.
     """
     # Ensure the repo root (with the pbs_attn package) is importable, then lazily
     # import the validated Triton kernel entry points.
     _repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _repo_root not in sys.path:
         sys.path.insert(0, _repo_root)
-    from pbs_attn.baselines.Reuse_v1 import reuse_v1_layer_per_hkv, IndexCache, _resolve_max_sel  # noqa: F401
+    from pbs_attn.baselines.Reuse_v1 import reuse_v1_layer_per_hkv, IndexCache, _resolve_max_sel, _MAX_SEL_TABLE  # noqa: F401
 
-    if budget not in (16, 32):
-        raise ValueError(f"budget must be 16 or 32, got {budget}")
+    if budget not in _MAX_SEL_TABLE:
+        raise ValueError(f"budget must be one of {sorted(_MAX_SEL_TABLE)}, got {budget}")
     if select_mode not in ('topk', 'topp'):
         raise ValueError(f"select_mode must be 'topk' or 'topp', got {select_mode!r}")
 
@@ -186,7 +200,7 @@ def get_reuse_v1_prefill(label_path, budget=32, block_size=128, segment_size=204
         sink_blocks=sink_blocks, local_blocks=local_blocks, causal=causal,
         select_mode=select_mode, top_p=top_p, min_blocks=min_blocks, max_blocks=max_blocks,
         topk_ratio=topk_ratio,
-        last_q_full=last_q_full,
+        last_q_full=last_q_full, per_head_topp=per_head_topp,
     )
     holder.label = ReuseV1Holder.load_label(label_path, device)
     holder.num_layers = holder.label.shape[0]

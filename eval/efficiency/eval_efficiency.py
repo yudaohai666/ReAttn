@@ -101,6 +101,7 @@ class ReuseV1Args:
     max_blocks: int = field(default=64, metadata={"help": "topp: max blocks per (kv_head, q_block); sizes kernel headroom/cache width."})
     topk_ratio: float = field(default=None, metadata={"help": "topk: if set, budget = ceil(kv_len//block_size * topk_ratio) + sink_blocks + local_blocks (overrides budget)."})
     last_q_full: bool = field(default=False, metadata={"help": "If True, last query block of sparse kv-heads attends full KV cache."})
+    per_head_topp: bool = field(default=False, metadata={"help": "topp: each q-head selects its own nucleus (no amax over G); costs G x IndexCache memory."})
 
 # --- duo (DuoAttention: retrieval heads dense + streaming heads sink+local) ---
 @dataclass
@@ -166,6 +167,7 @@ def build_prefill_fn(method: str, method_args):
             max_blocks=args.max_blocks,
             topk_ratio=args.topk_ratio,
             last_q_full=args.last_q_full,
+            per_head_topp=args.per_head_topp,
         )
     if method == "duo":
         args = method_args or DuoArgs(attn_load_dir=None)

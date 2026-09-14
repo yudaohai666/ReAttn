@@ -14,6 +14,9 @@ TOP_P="${TOP_P:-0.9}"
 SELECT_MODE="${SELECT_MODE:-topp}"
 TOPK_RATIO="${TOPK_RATIO:-}"
 MIN_BLOCKS="${MIN_BLOCKS:-8}"
+MAX_BLOCKS="${MAX_BLOCKS:-64}"
+# Fixed-budget block count for SELECT_MODE=topk (ignored by topp/topk_ratio).
+BUDGET="${BUDGET:-32}"
 
 METHOD="${METHOD:-reuse_v1}"
 RUN_TAG="${RUN_TAG:-topp0.9_rw0.0013_sp0.8}"
@@ -37,9 +40,9 @@ SHARDS=(
 COMMON=(--model "${MODEL}" --method "${METHOD}" --attn-impl sdpa
         --depths "${DEPTHS}" --max-new-tokens 50)
 if [ "${METHOD}" = "reuse_v1" ]; then
-  COMMON+=(--label-path "${LABEL}" --budget 32 --block-size 128 --segment-size 2048
+  COMMON+=(--label-path "${LABEL}" --budget "${BUDGET}" --block-size 128 --segment-size 2048
            --sink-blocks 1 --local-blocks 2
-           --select-mode "${SELECT_MODE}" --min-blocks "${MIN_BLOCKS}" --max-blocks 64)
+           --select-mode "${SELECT_MODE}" --min-blocks "${MIN_BLOCKS}" --max-blocks "${MAX_BLOCKS}")
   if [ "${SELECT_MODE}" = "topk_ratio" ]; then
     [ -n "${TOPK_RATIO}" ] || { echo "SELECT_MODE=topk_ratio requires TOPK_RATIO" >&2; exit 1; }
     COMMON+=(--topk-ratio "${TOPK_RATIO}")

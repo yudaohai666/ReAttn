@@ -590,8 +590,8 @@ def _block_sparse_indexed_fwd(
     stride_bz_k, stride_h_k, stride_seq_k, stride_d_k,
     stride_bz_v, stride_h_v, stride_seq_v, stride_d_v,
     stride_bz_o, stride_h_o, stride_seq_o, stride_d_o,
-    stride_ksel_z, stride_ksel_q, stride_ksel_s,
-    stride_kcnt_z, stride_kcnt_q,
+    stride_ksel_z, stride_ksel_h, stride_ksel_q, stride_ksel_s,
+    stride_kcnt_z, stride_kcnt_h, stride_kcnt_q,
     qo_len, kv_len, softmax_scale,
     autotune_h, autotune_head_dim, autotune_logical_block_size, autotune_num_kv_groups,
     H: tl.constexpr, num_kv_groups: tl.constexpr, HEAD_DIM: tl.constexpr,
@@ -623,8 +623,8 @@ def _block_sparse_indexed_fwd(
     acc = tl.zeros((BLOCK_M, HEAD_DIM), dtype=tl.float32)
     scale = softmax_scale * 1.44269504  # 1/log(2)
 
-    cnt = tl.load(K_cnt + pid_bz * stride_kcnt_z + logical_q_block * stride_kcnt_q)
-    sel_base = K_sel + pid_bz * stride_ksel_z + logical_q_block * stride_ksel_q
+    cnt = tl.load(K_cnt + pid_bz * stride_kcnt_z + pid_h * stride_kcnt_h + logical_q_block * stride_kcnt_q)
+    sel_base = K_sel + pid_bz * stride_ksel_z + pid_h * stride_ksel_h + logical_q_block * stride_ksel_q
 
     for i in range(0, MAX_SEL):
         if i < cnt:
@@ -667,7 +667,8 @@ def _sparse_block_attn(
     causal: bool = True,
     softmax_scale: float = None,
     k_sel: torch.Tensor = None,      # (b, nqb, max_sel) int32  — pre-compacted, skip _compact_block_mask
-    k_cnt: torch.Tensor = None,      # (b, nqb) int32
+                                     # OR (b, H, nqb, max_sel) int32 for per-head selection
+    k_cnt: torch.Tensor = None,      # (b, nqb) int32  OR (b, H, nqb) for per-head
     out: torch.Tensor = None,        # optional pre-allocated output buffer (may be non-contiguous)
 ) -> torch.Tensor:
     """Block-sparse attention that iterates ONLY the selected k-blocks per q-block
@@ -678,6 +679,11 @@ def _sparse_block_attn(
 
     If ``k_sel`` / ``k_cnt`` are provided (pre-compacted from the anchor pass),
     ``block_mask`` is ignored and ``_compact_block_mask`` is skipped entirely.
+
+    ``k_sel`` may be either head-shared ``(b, nqb, max_sel)`` (all H heads read the
+    same selection; the kernel uses ``stride_h=0`` broadcast) or per-head
+    ``(b, H, nqb, max_sel)`` with ``k_cnt`` ``(b, H, nqb)`` (each q-head reads its
+    own selection). The layout is detected from ``k_sel.dim()``.
 
     If ``out`` is provided, the kernel writes directly into it (avoiding an extra
     copy when the caller wants results in a non-contiguous slice of a larger buffer).
@@ -697,6 +703,18 @@ def _sparse_block_attn(
         max_sel = min(budget + 2, nkb)
         k_sel, k_cnt = _compact_block_mask(block_mask, max_sel)
 
+    # Per-head vs head-shared index layout (stride_h=0 broadcast for the shared case).
+    if k_sel.dim() == 4:
+        # (b, H, nqb, max_sel) / (b, H, nqb)
+        stride_ksel_z, stride_ksel_h, stride_ksel_q, stride_ksel_s = k_sel.stride()
+        stride_kcnt_z, stride_kcnt_h, stride_kcnt_q = k_cnt.stride()
+    else:
+        # (b, nqb, max_sel) / (b, nqb): broadcast across heads (stride_h == 0)
+        stride_ksel_z, stride_ksel_q, stride_ksel_s = k_sel.stride()
+        stride_ksel_h = 0
+        stride_kcnt_z, stride_kcnt_q = k_cnt.stride()
+        stride_kcnt_h = 0
+
     if out is None:
         out = torch.empty_like(q)
 
@@ -709,8 +727,8 @@ def _sparse_block_attn(
         k.stride(0), k.stride(1), k.stride(2), k.stride(3),
         v.stride(0), v.stride(1), v.stride(2), v.stride(3),
         out.stride(0), out.stride(1), out.stride(2), out.stride(3),
-        k_sel.stride(0), k_sel.stride(1), k_sel.stride(2),
-        k_cnt.stride(0), k_cnt.stride(1),
+        stride_ksel_z, stride_ksel_h, stride_ksel_q, stride_ksel_s,
+        stride_kcnt_z, stride_kcnt_h, stride_kcnt_q,
         s, s, softmax_scale,
         H, d, block_size, num_kv_groups,
         H=H, num_kv_groups=num_kv_groups, HEAD_DIM=d,
@@ -883,34 +901,57 @@ def _resolve_max_sel(select_mode: str, budget: int, max_blocks, nqb: int,
 class IndexCache:
     """Cross-layer persistent block-index table.
 
-    Shape: ``(batch, nqb, Hkv, max_sel)`` int32.  Each ``(b, qb, hkv)`` slot
-    stores the most-recently-computed anchor selection for that kv-head, padded
-    with ``nqb`` (sentinel).  Sparse heads read their own slot; anchor heads
-    overwrite it after computing a fresh selection.
+    Head-shared layout (default): ``(batch, nqb, Hkv, max_sel)`` int32.  Each
+    ``(b, qb, hkv)`` slot stores the most-recently-computed anchor selection for
+    that kv-head, padded with ``nqb`` (sentinel).  Sparse heads read their own
+    slot; anchor heads overwrite it after computing a fresh selection.
+
+    Per-head layout (``per_head=True``): ``(batch, Hkv, G, nqb, max_sel)`` int32,
+    one selection per q-head within each GQA group.  ``write``/``read`` then
+    accept/return ``(b, G, nqb, max_sel)`` / ``(b, G, nqb)`` for a kv-head.
     """
 
-    def __init__(self, batch: int, nqb: int, Hkv: int, max_sel: int, device):
+    def __init__(self, batch: int, nqb: int, Hkv: int, max_sel: int, device,
+                 per_head: bool = False, G: int = 1):
         self.batch = batch
         self.nqb = nqb
         self.Hkv = Hkv
         self.max_sel = max_sel
-        # Initialise with sentinel (nqb) so unwritten slots are safe to read.
-        self.buf = torch.full((batch, nqb, Hkv, max_sel), nqb,
-                              dtype=torch.int32, device=device)
-        # Per-kv-head count of valid entries (batch, nqb, Hkv).
-        self.cnt = torch.zeros((batch, nqb, Hkv), dtype=torch.int32, device=device)
+        self.per_head = per_head
+        self.G = G
+        if per_head:
+            # (batch, Hkv, G, nqb, max_sel) — write/read a full (b, G, nqb, *) slab per hkv.
+            self.buf = torch.full((batch, Hkv, G, nqb, max_sel), nqb,
+                                  dtype=torch.int32, device=device)
+            self.cnt = torch.zeros((batch, Hkv, G, nqb), dtype=torch.int32, device=device)
+        else:
+            # Initialise with sentinel (nqb) so unwritten slots are safe to read.
+            self.buf = torch.full((batch, nqb, Hkv, max_sel), nqb,
+                                  dtype=torch.int32, device=device)
+            # Per-kv-head count of valid entries (batch, nqb, Hkv).
+            self.cnt = torch.zeros((batch, nqb, Hkv), dtype=torch.int32, device=device)
 
     def write(self, hkv_idx: int, k_sel: torch.Tensor, k_cnt: torch.Tensor):
         """Store a fresh anchor selection for kv-head ``hkv_idx``.
 
-        ``k_sel``: (batch, nqb, max_sel) int32
-        ``k_cnt``: (batch, nqb) int32
+        shared:   ``k_sel`` (batch, nqb, max_sel),      ``k_cnt`` (batch, nqb)
+        per-head: ``k_sel`` (batch, G, nqb, max_sel),   ``k_cnt`` (batch, G, nqb)
         """
-        self.buf[:, :, hkv_idx, :] = k_sel
-        self.cnt[:, :, hkv_idx] = k_cnt
+        if self.per_head:
+            self.buf[:, hkv_idx] = k_sel
+            self.cnt[:, hkv_idx] = k_cnt
+        else:
+            self.buf[:, :, hkv_idx, :] = k_sel
+            self.cnt[:, :, hkv_idx] = k_cnt
 
     def read(self, hkv_idx: int):
-        """Return (k_sel, k_cnt) for kv-head ``hkv_idx``."""
+        """Return (k_sel, k_cnt) for kv-head ``hkv_idx``.
+
+        shared:   (batch, nqb, max_sel),    (batch, nqb)
+        per-head: (batch, G, nqb, max_sel), (batch, G, nqb)
+        """
+        if self.per_head:
+            return self.buf[:, hkv_idx], self.cnt[:, hkv_idx]
         return self.buf[:, :, hkv_idx, :], self.cnt[:, :, hkv_idx]
 
 
@@ -930,6 +971,10 @@ def _select_blocks_topp(
     Uses topk(max_blocks) instead of full sort to avoid O(nkb log nkb) cost.
     The final index list is produced by a single sort of at most max_blocks
     elements (vs the original two O(nkb) sorts).
+
+    Coverage denominator is the TRUE total attention mass over all causal
+    k-blocks (matches FlexPrefill's gamma semantics); top_p is faithful to
+    "cover top_p of the attention mass".
     """
     b = block_score.shape[0]
     off = nkb - nqb
@@ -952,7 +997,9 @@ def _select_blocks_topp(
 
     # Top-p threshold on the candidate set.
     cumsum = topk_vals.clamp(min=0.0).cumsum(dim=-1)
-    total  = cumsum[..., -1:].clamp(min=1e-9)
+    # Denominator = TRUE total mass over all causal k-blocks. imp holds -1.0
+    # on acausal positions, so clamp(min=0) removes them from the sum.
+    total = imp.clamp(min=0.0).sum(dim=-1, keepdim=True).clamp(min=1e-9)
     keep   = (cumsum / total) <= top_p                            # (b, nqb, k_cand)
     # Always keep at least min_blocks valid candidates.
     keep[..., :min_blocks] = (topk_vals[..., :min_blocks] >= 0.0)
@@ -1015,6 +1062,8 @@ def reuse_v1_layer_per_hkv(
     max_blocks: int = 64,
     topk_ratio: float = None,    # if set (topk mode only): budget = ceil(kv_len//block_size * topk_ratio) + sink_blocks + local_blocks
     last_q_full: bool = False,
+    per_head_topp: bool = False,  # topp only: each q-head selects its own nucleus (no amax over G)
+    layer_idx: int = None,        # only used for logging (REUSE_V1_LOG_BLOCKS=1)
 ) -> torch.Tensor:
     """Per-layer prefill forward with per-kv-head anchor/sparse dispatch.
 
@@ -1030,6 +1079,9 @@ def reuse_v1_layer_per_hkv(
     the full KV sequence (improves retrieval recall on NIAH / passkey tasks).
     """
     import math as _math
+
+    # Optional per-layer block-count logging (evaluation aid, off by default).
+    _log_blocks = os.environ.get('REUSE_V1_LOG_BLOCKS', '0') == '1'
 
     b, H, s, d = query_states.shape
     Hkv = key_states.shape[1]
@@ -1057,6 +1109,8 @@ def reuse_v1_layer_per_hkv(
     # ------------------------------------------------------------------ #
     # 1. Anchor heads: dense attention + compute fresh block selection
     # ------------------------------------------------------------------ #
+    if _log_blocks:
+        _kcnt_all = []   # per-anchor-head selected-block counts for logging
     for hkv in anchor_kv.tolist():
         q_h = q_grouped[:, hkv].contiguous()               # (b, G, s, d)
         k_h = key_states[:, hkv:hkv+1].contiguous()        # (b, 1, s, d)
@@ -1073,9 +1127,6 @@ def reuse_v1_layer_per_hkv(
         )
         out_grouped[:, hkv] = out_h
 
-        # Aggregate across G q-heads -> (b, nqb, nkb)
-        imp = block_score_h.amax(dim=1)   # (b, nqb, nkb)
-
         if select_mode == 'topk':
             mask = select_topk_blocks(
                 block_score_h, budget=budget, causal=causal,
@@ -1090,22 +1141,48 @@ def reuse_v1_layer_per_hkv(
         else:  # topp
             max_sel = _resolve_max_sel('topp', budget, max_blocks, nqb,
                                        sink_blocks=sink_blocks, local_blocks=local_blocks)
-            k_sel, k_cnt = _select_blocks_topp(
-                imp, top_p=top_p, min_blocks=min_blocks, max_blocks=max_blocks,
-                max_sel=max_sel, causal=causal, nkb=nkb, nqb=nqb, dev=dev,
-            )
+            if per_head_topp:
+                # Each q-head selects its own nucleus (no amax over G). Fold G into
+                # the batch dim (the first dim of _select_blocks_topp is generic).
+                imp_ph = block_score_h.reshape(b * G, nqb, nkb)   # (b*G, nqb, nkb)
+                k_sel, k_cnt = _select_blocks_topp(
+                    imp_ph, top_p=top_p, min_blocks=min_blocks, max_blocks=max_blocks,
+                    max_sel=max_sel, causal=causal, nkb=nkb, nqb=nqb, dev=dev,
+                )
+                k_sel = k_sel.reshape(b, G, nqb, max_sel)   # (b, G, nqb, max_sel)
+                k_cnt = k_cnt.reshape(b, G, nqb)            # (b, G, nqb)
+            else:
+                # Aggregate across G q-heads -> (b, nqb, nkb), shared selection.
+                imp = block_score_h.amax(dim=1)   # (b, nqb, nkb)
+                k_sel, k_cnt = _select_blocks_topp(
+                    imp, top_p=top_p, min_blocks=min_blocks, max_blocks=max_blocks,
+                    max_sel=max_sel, causal=causal, nkb=nkb, nqb=nqb, dev=dev,
+                )
 
         cache.write(hkv, k_sel, k_cnt)
+        if _log_blocks:
+            _kcnt_all.append(k_cnt)
 
     # ------------------------------------------------------------------ #
     # 2. Sparse heads: reuse cached selection
     # ------------------------------------------------------------------ #
+    if _log_blocks:
+        if _kcnt_all:
+            _all = torch.cat([c.reshape(-1) for c in _kcnt_all]).float()
+            _mean, _min, _max = _all.mean().item(), _all.min().item(), _all.max().item()
+            _ratio = _all.sum().item() / (nkb * _all.numel()) * 100.0
+            print(f"[reuse_v1] layer {layer_idx}: anchors={len(anchor_kv)}/{Hkv} "
+                  f"k_cnt mean={_mean:.2f} min={_min:.0f} max={_max:.0f} "
+                  f"({_ratio:.1f}% of {nkb} blocks)", flush=True)
+        else:
+            print(f"[reuse_v1] layer {layer_idx}: anchors=0/{Hkv} (all-sparse, no fresh selection)",
+                  flush=True)
     for hkv in sparse_kv.tolist():
         q_h = q_grouped[:, hkv].contiguous()               # (b, G, s, d)
         k_h = key_states[:, hkv:hkv+1].contiguous()
         v_h = value_states[:, hkv:hkv+1].contiguous()
 
-        k_sel, k_cnt = cache.read(hkv)   # (b, nqb, max_sel), (b, nqb)
+        k_sel, k_cnt = cache.read(hkv)   # shared: (b, nqb, *); per-head: (b, G, nqb, *)
         max_sel = cache.max_sel
 
         # Optionally run the last q-block densely for better retrieval recall
@@ -1115,11 +1192,18 @@ def reuse_v1_layer_per_hkv(
             # Sparse attention for all but last q-block — write directly into
             # out_grouped[:, hkv, :, :last_q_start] to avoid an extra non-contiguous copy.
             if last_qb > 0:
+                # nqb axis is dim 1 (shared) or dim 2 (per-head) of k_sel/k_cnt.
+                if cache.per_head:
+                    ksel_body = k_sel[:, :, :last_qb].contiguous()
+                    kcnt_body = k_cnt[:, :, :last_qb].contiguous()
+                else:
+                    ksel_body = k_sel[:, :last_qb].contiguous()
+                    kcnt_body = k_cnt[:, :last_qb].contiguous()
                 _sparse_block_attn(
                     q_h[:, :, :last_q_start], k_h, v_h,
                     None, budget, block_size, causal, softmax_scale,
-                    k_sel=k_sel[:, :last_qb].contiguous(),
-                    k_cnt=k_cnt[:, :last_qb].contiguous(),
+                    k_sel=ksel_body,
+                    k_cnt=kcnt_body,
                     out=out_grouped[:, hkv, :, :last_q_start],
                 )
 

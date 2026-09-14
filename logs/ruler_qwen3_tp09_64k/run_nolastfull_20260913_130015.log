@@ -1,0 +1,71 @@
+=== [qwen3 reuse_v1 RULER 64k] START 2026-09-13T13:00:15+08:00 ===
+  label = /root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/attn_patterns/reuse_v1/Qwen3-8B/hc-orig-rw=0.003-init=0.0-sp=0.8-tp=0.9-lr=0.01-ctx=8000_128000-multi_passkey10-sp8-mb8-xb64/label.pt
+  top_p = 0.9  max_blocks = 1024  last_q_full = 0
+09/13 13:00:27 - OpenCompass - INFO - Current exp folder: ./results/ruler/exps_qwen3_8b/reuse_v1/20260913_130027
+09/13 13:00:27 - OpenCompass - WARNING - SlurmRunner is not used, so the partition argument is ignored.
+09/13 13:00:27 - OpenCompass - INFO - Partitioned into 8 tasks.
+  0%|          | 0/8 [00:00<?, ?it/s]                                       0%|          | 0/8 [00:00<?, ?it/s]                                       0%|          | 0/8 [00:00<?, ?it/s]                                       0%|          | 0/8 [00:00<?, ?it/s]                                       0%|          | 0/8 [00:00<?, ?it/s]                                       0%|          | 0/8 [00:00<?, ?it/s]                                       0%|          | 0/8 [00:00<?, ?it/s]                                       0%|          | 0/8 [00:00<?, ?it/s]                                       0%|          | 0/8 [00:00<?, ?it/s] 12%|█▎        | 1/8 [41:38<4:51:32, 2498.92s/it] 25%|██▌       | 2/8 [41:47<1:43:25, 1034.25s/it] 38%|███▊      | 3/8 [41:51<46:57, 563.41s/it]    50%|█████     | 4/8 [41:59<22:57, 344.35s/it] 62%|██████▎   | 5/8 [43:00<12:06, 242.03s/it] 75%|███████▌  | 6/8 [43:18<05:32, 166.07s/it] 88%|████████▊ | 7/8 [44:04<02:06, 126.71s/it]100%|██████████| 8/8 [44:37<00:00, 96.96s/it] 100%|██████████| 8/8 [44:37<00:00, 334.71s/it]
+launch OpenICLInfer[qwen3-8b-reuse-v1/ruler_cwe_64k_0,qwen3-8b-reuse-v1/ruler_fwe_64k_0,qwen3-8b-reuse-v1/ruler_niah_single_1_64k_0,qwen3-8b-reuse-v1/ruler_niah_single_2_64k_0,qwen3-8b-reuse-v1/ruler_niah_single_3_64k_0,qwen3-8b-reuse-v1/ruler_niah_multikey_1_64k_0,qwen3-8b-reuse-v1/ruler_niah_multikey_2_64k_0,qwen3-8b-reuse-v1/ruler_niah_multikey_3_64k_0,qwen3-8b-reuse-v1/ruler_niah_multivalue_64k_0,qwen3-8b-reuse-v1/ruler_niah_multiquery_64k_0,qwen3-8b-reuse-v1/ruler_qa_squad_64k_0,qwen3-8b-reuse-v1/ruler_qa_hotpotqa_64k_0,qwen3-8b-reuse-v1/ruler_vt_64k_0] on GPU 0
+launch OpenICLInfer[qwen3-8b-reuse-v1/ruler_cwe_64k_1,qwen3-8b-reuse-v1/ruler_fwe_64k_1,qwen3-8b-reuse-v1/ruler_niah_single_1_64k_1,qwen3-8b-reuse-v1/ruler_niah_single_2_64k_1,qwen3-8b-reuse-v1/ruler_niah_single_3_64k_1,qwen3-8b-reuse-v1/ruler_niah_multikey_1_64k_1,qwen3-8b-reuse-v1/ruler_niah_multikey_2_64k_1,qwen3-8b-reuse-v1/ruler_niah_multikey_3_64k_1,qwen3-8b-reuse-v1/ruler_niah_multivalue_64k_1,qwen3-8b-reuse-v1/ruler_niah_multiquery_64k_1,qwen3-8b-reuse-v1/ruler_qa_squad_64k_1,qwen3-8b-reuse-v1/ruler_qa_hotpotqa_64k_1,qwen3-8b-reuse-v1/ruler_vt_64k_1] on GPU 1
+launch OpenICLInfer[qwen3-8b-reuse-v1/ruler_cwe_64k_2,qwen3-8b-reuse-v1/ruler_fwe_64k_2,qwen3-8b-reuse-v1/ruler_niah_single_1_64k_2,qwen3-8b-reuse-v1/ruler_niah_single_2_64k_2,qwen3-8b-reuse-v1/ruler_niah_single_3_64k_2,qwen3-8b-reuse-v1/ruler_niah_multikey_1_64k_2,qwen3-8b-reuse-v1/ruler_niah_multikey_2_64k_2,qwen3-8b-reuse-v1/ruler_niah_multikey_3_64k_2,qwen3-8b-reuse-v1/ruler_niah_multivalue_64k_2,qwen3-8b-reuse-v1/ruler_niah_multiquery_64k_2,qwen3-8b-reuse-v1/ruler_qa_squad_64k_2,qwen3-8b-reuse-v1/ruler_qa_hotpotqa_64k_2,qwen3-8b-reuse-v1/ruler_vt_64k_2] on GPU 2
+launch OpenICLInfer[qwen3-8b-reuse-v1/ruler_cwe_64k_3,qwen3-8b-reuse-v1/ruler_fwe_64k_3,qwen3-8b-reuse-v1/ruler_niah_single_1_64k_3,qwen3-8b-reuse-v1/ruler_niah_single_2_64k_3,qwen3-8b-reuse-v1/ruler_niah_single_3_64k_3,qwen3-8b-reuse-v1/ruler_niah_multikey_1_64k_3,qwen3-8b-reuse-v1/ruler_niah_multikey_2_64k_3,qwen3-8b-reuse-v1/ruler_niah_multikey_3_64k_3,qwen3-8b-reuse-v1/ruler_niah_multivalue_64k_3,qwen3-8b-reuse-v1/ruler_niah_multiquery_64k_3,qwen3-8b-reuse-v1/ruler_qa_squad_64k_3,qwen3-8b-reuse-v1/ruler_qa_hotpotqa_64k_3,qwen3-8b-reuse-v1/ruler_vt_64k_3] on GPU 3
+launch OpenICLInfer[qwen3-8b-reuse-v1/ruler_cwe_64k_4,qwen3-8b-reuse-v1/ruler_fwe_64k_4,qwen3-8b-reuse-v1/ruler_niah_single_1_64k_4,qwen3-8b-reuse-v1/ruler_niah_single_2_64k_4,qwen3-8b-reuse-v1/ruler_niah_single_3_64k_4,qwen3-8b-reuse-v1/ruler_niah_multikey_1_64k_4,qwen3-8b-reuse-v1/ruler_niah_multikey_2_64k_4,qwen3-8b-reuse-v1/ruler_niah_multikey_3_64k_4,qwen3-8b-reuse-v1/ruler_niah_multivalue_64k_4,qwen3-8b-reuse-v1/ruler_niah_multiquery_64k_4,qwen3-8b-reuse-v1/ruler_qa_squad_64k_4,qwen3-8b-reuse-v1/ruler_qa_hotpotqa_64k_4,qwen3-8b-reuse-v1/ruler_vt_64k_4] on GPU 4
+launch OpenICLInfer[qwen3-8b-reuse-v1/ruler_cwe_64k_5,qwen3-8b-reuse-v1/ruler_fwe_64k_5,qwen3-8b-reuse-v1/ruler_niah_single_1_64k_5,qwen3-8b-reuse-v1/ruler_niah_single_2_64k_5,qwen3-8b-reuse-v1/ruler_niah_single_3_64k_5,qwen3-8b-reuse-v1/ruler_niah_multikey_1_64k_5,qwen3-8b-reuse-v1/ruler_niah_multikey_2_64k_5,qwen3-8b-reuse-v1/ruler_niah_multikey_3_64k_5,qwen3-8b-reuse-v1/ruler_niah_multivalue_64k_5,qwen3-8b-reuse-v1/ruler_niah_multiquery_64k_5,qwen3-8b-reuse-v1/ruler_qa_squad_64k_5,qwen3-8b-reuse-v1/ruler_qa_hotpotqa_64k_5,qwen3-8b-reuse-v1/ruler_vt_64k_5] on GPU 5
+launch OpenICLInfer[qwen3-8b-reuse-v1/ruler_cwe_64k_6,qwen3-8b-reuse-v1/ruler_fwe_64k_6,qwen3-8b-reuse-v1/ruler_niah_single_1_64k_6,qwen3-8b-reuse-v1/ruler_niah_single_2_64k_6,qwen3-8b-reuse-v1/ruler_niah_single_3_64k_6,qwen3-8b-reuse-v1/ruler_niah_multikey_1_64k_6,qwen3-8b-reuse-v1/ruler_niah_multikey_2_64k_6,qwen3-8b-reuse-v1/ruler_niah_multikey_3_64k_6,qwen3-8b-reuse-v1/ruler_niah_multivalue_64k_6,qwen3-8b-reuse-v1/ruler_niah_multiquery_64k_6,qwen3-8b-reuse-v1/ruler_qa_squad_64k_6,qwen3-8b-reuse-v1/ruler_qa_hotpotqa_64k_6,qwen3-8b-reuse-v1/ruler_vt_64k_6] on GPU 6
+launch OpenICLInfer[qwen3-8b-reuse-v1/ruler_cwe_64k_7,qwen3-8b-reuse-v1/ruler_fwe_64k_7,qwen3-8b-reuse-v1/ruler_niah_single_1_64k_7,qwen3-8b-reuse-v1/ruler_niah_single_2_64k_7,qwen3-8b-reuse-v1/ruler_niah_single_3_64k_7,qwen3-8b-reuse-v1/ruler_niah_multikey_1_64k_7,qwen3-8b-reuse-v1/ruler_niah_multikey_2_64k_7,qwen3-8b-reuse-v1/ruler_niah_multikey_3_64k_7,qwen3-8b-reuse-v1/ruler_niah_multivalue_64k_7,qwen3-8b-reuse-v1/ruler_niah_multiquery_64k_7,qwen3-8b-reuse-v1/ruler_qa_squad_64k_7,qwen3-8b-reuse-v1/ruler_qa_hotpotqa_64k_7,qwen3-8b-reuse-v1/ruler_vt_64k_7] on GPU 7
+09/13 13:45:05 - OpenCompass - INFO - Partitioned into 13 tasks.
+  0%|          | 0/13 [00:00<?, ?it/s]                                        0%|          | 0/13 [00:00<?, ?it/s]                                        0%|          | 0/13 [00:00<?, ?it/s]                                        0%|          | 0/13 [00:00<?, ?it/s]                                        0%|          | 0/13 [00:00<?, ?it/s]                                        0%|          | 0/13 [00:00<?, ?it/s]                                        0%|          | 0/13 [00:00<?, ?it/s]                                        0%|          | 0/13 [00:00<?, ?it/s]                                        0%|          | 0/13 [00:00<?, ?it/s]  8%|▊         | 1/13 [00:24<04:54, 24.57s/it]                                                8%|▊         | 1/13 [00:24<04:54, 24.57s/it] 15%|█▌        | 2/13 [00:26<02:01, 11.02s/it]                                               15%|█▌        | 2/13 [00:26<02:01, 11.02s/it] 23%|██▎       | 3/13 [00:26<01:00,  6.09s/it]                                               23%|██▎       | 3/13 [00:26<01:00,  6.09s/it] 31%|███       | 4/13 [00:26<00:34,  3.87s/it] 38%|███▊      | 5/13 [00:26<00:15,  1.95s/it]                                               38%|███▊      | 5/13 [00:26<00:15,  1.95s/it]                                               46%|████▌     | 6/13 [00:26<00:10,  1.45s/it] 46%|████▌     | 6/13 [00:27<00:10,  1.45s/it] 54%|█████▍    | 7/13 [00:27<00:07,  1.28s/it] 62%|██████▏   | 8/13 [00:28<00:05,  1.13s/it] 69%|██████▉   | 9/13 [00:42<00:19,  4.81s/it] 85%|████████▍ | 11/13 [00:43<00:05,  2.95s/it] 92%|█████████▏| 12/13 [00:45<00:02,  2.63s/it]100%|██████████| 13/13 [00:50<00:00,  3.23s/it]100%|██████████| 13/13 [00:50<00:00,  3.87s/it]
+launch OpenICLEval[qwen3-8b-reuse-v1/ruler_cwe_64k] on CPU 
+launch OpenICLEval[qwen3-8b-reuse-v1/ruler_fwe_64k] on CPU 
+launch OpenICLEval[qwen3-8b-reuse-v1/ruler_niah_single_1_64k] on CPU 
+launch OpenICLEval[qwen3-8b-reuse-v1/ruler_niah_single_2_64k] on CPU 
+launch OpenICLEval[qwen3-8b-reuse-v1/ruler_niah_single_3_64k] on CPU 
+launch OpenICLEval[qwen3-8b-reuse-v1/ruler_niah_multikey_1_64k] on CPU 
+launch OpenICLEval[qwen3-8b-reuse-v1/ruler_niah_multikey_2_64k] on CPU 
+launch OpenICLEval[qwen3-8b-reuse-v1/ruler_niah_multikey_3_64k] on CPU 
+launch OpenICLEval[qwen3-8b-reuse-v1/ruler_niah_multivalue_64k] on CPU 
+launch OpenICLEval[qwen3-8b-reuse-v1/ruler_niah_multiquery_64k] on CPU 
+launch OpenICLEval[qwen3-8b-reuse-v1/ruler_qa_squad_64k] on CPU 
+launch OpenICLEval[qwen3-8b-reuse-v1/ruler_qa_hotpotqa_64k] on CPU 
+launch OpenICLEval[qwen3-8b-reuse-v1/ruler_vt_64k] on CPU 
+dataset                    version    metric    mode      qwen3-8b-reuse-v1
+-------------------------  ---------  --------  ------  -------------------
+ruler_64k                  -          score     gen                   74.42
+ruler_cwe_64k              2401f5     score     gen                   23.80
+ruler_fwe_64k              2401f5     score     gen                   79.17
+ruler_niah_single_1_64k    2401f5     score     gen                  100.00
+ruler_niah_single_2_64k    2401f5     score     gen                  100.00
+ruler_niah_single_3_64k    2401f5     score     gen                  100.00
+ruler_niah_multikey_1_64k  2401f5     score     gen                   86.50
+ruler_niah_multikey_2_64k  2401f5     score     gen                   56.00
+ruler_niah_multikey_3_64k  2401f5     score     gen                   17.50
+ruler_niah_multivalue_64k  2401f5     score     gen                   95.00
+ruler_niah_multiquery_64k  2401f5     score     gen                   97.00
+ruler_qa_squad_64k         2401f5     score     gen                   67.50
+ruler_qa_hotpotqa_64k      2401f5     score     gen                   46.50
+ruler_vt_64k               2401f5     score     gen                   98.50
+09/13 13:45:55 - OpenCompass - INFO - write summary to /root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/eval/benchmarks/results/ruler/exps_qwen3_8b/reuse_v1/20260913_130027/summary/summary_20260913_130027.txt
+09/13 13:45:55 - OpenCompass - INFO - write csv to /root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/eval/benchmarks/results/ruler/exps_qwen3_8b/reuse_v1/20260913_130027/summary/summary_20260913_130027.csv
+
+
+The markdown format results is as below:
+
+| dataset | version | metric | mode | qwen3-8b-reuse-v1 |
+|----- | ----- | ----- | ----- | -----|
+| ruler_64k | - | score | gen | 74.42 |
+| ruler_cwe_64k | 2401f5 | score | gen | 23.80 |
+| ruler_fwe_64k | 2401f5 | score | gen | 79.17 |
+| ruler_niah_single_1_64k | 2401f5 | score | gen | 100.00 |
+| ruler_niah_single_2_64k | 2401f5 | score | gen | 100.00 |
+| ruler_niah_single_3_64k | 2401f5 | score | gen | 100.00 |
+| ruler_niah_multikey_1_64k | 2401f5 | score | gen | 86.50 |
+| ruler_niah_multikey_2_64k | 2401f5 | score | gen | 56.00 |
+| ruler_niah_multikey_3_64k | 2401f5 | score | gen | 17.50 |
+| ruler_niah_multivalue_64k | 2401f5 | score | gen | 95.00 |
+| ruler_niah_multiquery_64k | 2401f5 | score | gen | 97.00 |
+| ruler_qa_squad_64k | 2401f5 | score | gen | 67.50 |
+| ruler_qa_hotpotqa_64k | 2401f5 | score | gen | 46.50 |
+| ruler_vt_64k | 2401f5 | score | gen | 98.50 |
+
+09/13 13:45:55 - OpenCompass - INFO - write markdown summary to /root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/eval/benchmarks/results/ruler/exps_qwen3_8b/reuse_v1/20260913_130027/summary/summary_20260913_130027.md
+=== [qwen3 reuse_v1 RULER 64k] EXIT 0 2026-09-13T13:45:58+08:00 ===
