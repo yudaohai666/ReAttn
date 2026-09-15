@@ -14,6 +14,9 @@ _REUSE_V1_LAST_Q_FULL = __import__('os').environ.get('QWEN3_REUSE_V1_LAST_Q_FULL
 _REUSE_V1_TOP_P = float(__import__('os').environ.get('QWEN3_REUSE_V1_TOP_P', '0.7'))
 _REUSE_V1_MIN_BLOCKS = int(__import__('os').environ.get('QWEN3_REUSE_V1_MIN_BLOCKS', '8'))
 _REUSE_V1_MAX_BLOCKS = int(__import__('os').environ.get('QWEN3_REUSE_V1_MAX_BLOCKS', '64'))
+# topp-only: each q-head in a GQA group selects its own nucleus (no amax over the
+# group). Override via QWEN3_REUSE_V1_PER_HEAD_TOPP=1. Default off (backward compat).
+_REUSE_V1_PER_HEAD_TOPP = __import__('os').environ.get('QWEN3_REUSE_V1_PER_HEAD_TOPP', '0') == '1'
 
 api_meta_template = dict(
     round=[
@@ -57,7 +60,7 @@ qwen3_8b_reuse_v1_models = [
             min_blocks=_REUSE_V1_MIN_BLOCKS,
             max_blocks=_REUSE_V1_MAX_BLOCKS,
             last_q_full=_REUSE_V1_LAST_Q_FULL,
-            per_head_topp=False,
+            per_head_topp=_REUSE_V1_PER_HEAD_TOPP,
         ),
         model_kwargs=dict(torch_dtype='torch.bfloat16'),
         max_out_len=2048,
