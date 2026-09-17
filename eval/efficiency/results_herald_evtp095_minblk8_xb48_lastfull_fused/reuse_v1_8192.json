@@ -1,0 +1,31 @@
+{
+    "script_args": {
+        "method": "reuse_v1",
+        "len": 8192,
+        "n_examples": 3,
+        "num_warmup_iter": 3,
+        "no_save": false,
+        "output_dir": "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/eval/efficiency/results_herald_evtp095_minblk8_xb48_lastfull_fused",
+        "model_name": "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/data/Llama-3.1-8B-Instruct"
+    },
+    "method_args": {
+        "label_path": "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/sparse_refuse/ReAttn/attn_patterns/reuse_v1/Llama-3.1-8B-Instruct/hc-orig-rw=0.003-init=0.0-sp=0.8-tp=0.9-lr=0.01-ctx=8000_128000-multi_passkey10-sp8-mb8-xb64/label.pt",
+        "budget": 32,
+        "block_size": 128,
+        "segment_size": 2048,
+        "sink_blocks": 1,
+        "local_blocks": 2,
+        "select_mode": "topp",
+        "top_p": 0.95,
+        "min_blocks": 8,
+        "max_blocks": 48,
+        "topk_ratio": null,
+        "last_q_full": true,
+        "per_head_topp": false
+    },
+    "model_name": "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/data/Llama-3.1-8B-Instruct",
+    "tokenizer_name": "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/data/Llama-3.1-8B-Instruct",
+    "num_tokens": 8192,
+    "avg_e2e_latency": 0.34708484903971354,
+    "e2e_std": 0.0030601192265748978
+}

@@ -29,6 +29,13 @@ _REUSE_V1_LAST_Q_FULL = __import__('os').environ.get('LLAMA_REUSE_V1_LAST_Q_FULL
 # label was trained with. Override via LLAMA_REUSE_V1_TOP_P.
 _REUSE_V1_TOP_P = float(__import__('os').environ.get('LLAMA_REUSE_V1_TOP_P', '0.9'))
 
+# reuse_v1 block-budget knobs (mirror the Qwen3 model). Override via
+# LLAMA_REUSE_V1_MIN_BLOCKS / LLAMA_REUSE_V1_MAX_BLOCKS. per_head_topp=1 uses
+# per-head nucleus; 0 = group-shared (nohead).
+_REUSE_V1_MIN_BLOCKS = int(__import__('os').environ.get('LLAMA_REUSE_V1_MIN_BLOCKS', '8'))
+_REUSE_V1_MAX_BLOCKS = int(__import__('os').environ.get('LLAMA_REUSE_V1_MAX_BLOCKS', '64'))
+_REUSE_V1_PER_HEAD_TOPP = __import__('os').environ.get('LLAMA_REUSE_V1_PER_HEAD_TOPP', '0') == '1'
+
 # Label DIR for the DuoAttention model (holds full_attention_heads.tsv + config.json).
 # Override via LLAMA_DUO_LABEL_DIR; defaults to THIS repo's ckp/duo copy.
 _DUO_LABEL_DIR = __import__('os').environ.get(
@@ -211,10 +218,10 @@ llama_31_8b_reuse_v1_models = [
             causal=True,
             select_mode='topp',
             top_p=_REUSE_V1_TOP_P,
-            min_blocks=8,
-            max_blocks=64,
+            min_blocks=_REUSE_V1_MIN_BLOCKS,
+            max_blocks=_REUSE_V1_MAX_BLOCKS,
             last_q_full=_REUSE_V1_LAST_Q_FULL,
-            per_head_topp=False,
+            per_head_topp=_REUSE_V1_PER_HEAD_TOPP,
         ),
         model_kwargs=dict(
             torch_dtype='torch.bfloat16'

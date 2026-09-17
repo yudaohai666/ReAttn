@@ -1,0 +1,22 @@
+{
+    "script_args": {
+        "method": "pbs",
+        "len": 131072,
+        "n_examples": 5,
+        "num_warmup_iter": 10,
+        "no_save": false,
+        "output_dir": "results_venv_pbs",
+        "model_name": "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/data/Llama-3.1-8B-Instruct"
+    },
+    "method_args": {
+        "block_size": 128,
+        "segment_size": 256,
+        "threshold": 0.9,
+        "force_select_first_block": true
+    },
+    "model_name": "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/data/Llama-3.1-8B-Instruct",
+    "tokenizer_name": "/root/paddlejob/share-storage/gpfs/system-public/yudaohai/data/Llama-3.1-8B-Instruct",
+    "num_tokens": 131072,
+    "avg_e2e_latency": 7.39004765625,
+    "e2e_std": 0.2727382779121399
+}

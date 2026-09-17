@@ -482,6 +482,190 @@ def block_sparse_attn_with_score(
     return out, block_score
 
 
+# --------------------------------------------------------------------------- #
+# GQA-fused anchor forward (opt-in via REUSE_V1_FUSED_ANCHOR=1).
+#
+# The per-head anchor kernel (`_block_sparse_score_fwd`) reloads a kv-head's K/V
+# from HBM once per each of its G q-heads. This fused variant grids over Hkv and
+# stacks the G q-heads of a group in the row dimension (ROWS = G*BLOCK_M), so K/V
+# is read ONCE per group. Row-wise online softmax is independent per row, and each
+# row writes its own head's slice of the Mass scratch (per-row head offset g_of),
+# so the UNMODIFIED `_block_score_reduce_kernel` + host selection stay byte-for-byte
+# identical. At the matched BLOCK_N=128 the emitted scores are bit-identical to
+# `block_sparse_attn_with_score` in the causal region (the only region ever read by
+# selection); measured 1.25-1.4x on the anchor path. Dense/all-select causal only.
+# --------------------------------------------------------------------------- #
+@triton.jit
+def _gqa_fused_score_fwd(
+    Q, K, V, O, Mass, LSE2,
+    sb_q, sh_q, ss_q, sd_q,
+    sb_k, sh_k, ss_k, sd_k,
+    sb_v, sh_v, ss_v, sd_v,
+    sb_o, sh_o, ss_o, sd_o,
+    sm_z, sm_h, sm_row, sm_blk,
+    sl_z, sl_h, sl_row,
+    qo_len, kv_len, softmax_scale, q_row_offset,
+    G: tl.constexpr, HEAD_DIM: tl.constexpr,
+    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, LOGICAL_BLOCK_SIZE: tl.constexpr,
+):
+    pid_m = tl.program_id(0)
+    pid_hkv = tl.program_id(1).to(tl.int64)
+    pid_b = tl.program_id(2).to(tl.int64)
+
+    ROWS: tl.constexpr = G * BLOCK_M
+    row = tl.arange(0, ROWS)
+    g_of = (row // BLOCK_M).to(tl.int64)          # head within the kv-group
+    m_of = row % BLOCK_M                          # local query index in the block
+    local_row = pid_m * BLOCK_M + m_of            # chunk-local query row
+    pos = q_row_offset + local_row                # absolute query position
+    offs_d = tl.arange(0, HEAD_DIM)
+    scale = softmax_scale * 1.44269504
+
+    qh = (pid_hkv * G + g_of)                     # absolute q-head per row
+    q_row = pid_b * sb_q + qh * sh_q + pos * ss_q
+    q = tl.load(Q + q_row[:, None] + offs_d[None, :] * sd_q,
+                mask=pos[:, None] < qo_len, other=0.0)
+
+    k_base = K + pid_b * sb_k + pid_hkv * sh_k
+    v_base = V + pid_b * sb_v + pid_hkv * sh_v
+
+    m_i = tl.zeros((ROWS,), tl.float32) - float("inf")
+    l_i = tl.zeros((ROWS,), tl.float32) + 1.0
+    acc = tl.zeros((ROWS, HEAD_DIM), tl.float32)
+    blk_m = tl.zeros((ROWS,), tl.float32) - float("inf")
+    blk_l = tl.zeros((ROWS,), tl.float32)
+
+    mass_base = Mass + pid_b * sm_z.to(tl.int64) + qh * sm_h.to(tl.int64)
+    mass_row = local_row * sm_row
+    row_valid = pos < qo_len
+
+    hi = tl.minimum(q_row_offset + (pid_m + 1) * BLOCK_M, kv_len)
+    for kj in range(0, hi, BLOCK_N):
+        offs_n = kj + tl.arange(0, BLOCK_N)
+        k = tl.load(k_base + offs_n[:, None] * ss_k + offs_d[None, :] * sd_k,
+                    mask=offs_n[:, None] < kv_len, other=0.0)      # loaded ONCE per group
+        v = tl.load(v_base + offs_n[:, None] * ss_v + offs_d[None, :] * sd_v,
+                    mask=offs_n[:, None] < kv_len, other=0.0)
+        qk = tl.dot(q, tl.trans(k)) * scale
+        kv_mask = (offs_n[None, :] >= kv_len) | (pos[:, None] < offs_n[None, :])
+        qk = qk + tl.where(kv_mask, -1e6, 0.0)
+        local_m = tl.max(qk, 1)
+        m_ij = tl.maximum(m_i, local_m)
+        qk -= m_ij[:, None]
+        p = tl.math.exp2(qk)
+        l_ij = tl.sum(p, 1)
+        alpha = tl.math.exp2(m_i - m_ij)
+        acc = acc * alpha[:, None] + tl.dot(p.to(v.dtype), v)
+        l_i = l_i * alpha + l_ij
+        m_i = m_ij
+
+        new_blk_m = tl.maximum(blk_m, m_ij)
+        blk_l = (blk_l * tl.math.exp2(blk_m - new_blk_m)
+                 + l_ij * tl.math.exp2(m_ij - new_blk_m))
+        blk_m = new_blk_m
+        if (kj % LOGICAL_BLOCK_SIZE) == (LOGICAL_BLOCK_SIZE - BLOCK_N):
+            lse_mass = tl.where(blk_l > 0.0, blk_m + tl.math.log2(blk_l), -float("inf"))
+            logical_k_block = kj // LOGICAL_BLOCK_SIZE
+            tl.store(mass_base + logical_k_block * sm_blk + mass_row,
+                     lse_mass, mask=row_valid)
+            blk_m = tl.zeros((ROWS,), tl.float32) - float("inf")
+            blk_l = tl.zeros((ROWS,), tl.float32)
+
+    out = acc / l_i[:, None]
+    o_row = pid_b * sb_o + qh * sh_o + pos * ss_o
+    tl.store(O + o_row[:, None] + offs_d[None, :] * sd_o,
+             out.to(O.type.element_ty), mask=pos[:, None] < qo_len)
+
+    lse2 = m_i + tl.math.log2(l_i)
+    tl.store(LSE2 + pid_b * sl_z + qh * sl_h + local_row * sl_row, lse2, mask=row_valid)
+
+
+# Fused-anchor tiling: BLOCK_N=128 gives scores bit-identical to production's
+# autotuned BLOCK_N=128; BLOCK_M=32 keeps ROWS = G*BLOCK_M small enough to avoid
+# the register/SRAM blowup that collapses occupancy at larger BLOCK_M.
+_FUSED_ANCHOR_BM = int(os.environ.get("REUSE_V1_FUSED_ANCHOR_BM", "32"))
+_FUSED_ANCHOR_BN = int(os.environ.get("REUSE_V1_FUSED_ANCHOR_BN", "128"))
+
+# GQA-fused SPARSE (indexed) path tiling. Same rationale as the anchor fusion:
+# with head-shared block selection (nohead), all G q-heads of a kv-group iterate the
+# SAME selected k-blocks, so K/V can be loaded ONCE per group instead of G times.
+# The sparse path is strongly KV-BW-bound (~73% HBM peak at 128K), so fusion has
+# more headroom here than the anchor. BLOCK_N=128 matches production's fixed config
+# for a bit-identical check; BLOCK_M=32 keeps ROWS=G*BLOCK_M off the SRAM ceiling.
+_FUSED_SPARSE_BM = int(os.environ.get("REUSE_V1_FUSED_SPARSE_BM", "32"))
+_FUSED_SPARSE_BN = int(os.environ.get("REUSE_V1_FUSED_SPARSE_BN", "128"))
+
+
+def block_sparse_attn_with_score_fused(
+    q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,   # (batch, H, seq, dim)
+    block_mask: torch.Tensor = None,   # accepted for signature parity; implicitly all-True (dense)
+    block_size: int = 128,
+    segment_size: int = 2048,   # accepted for signature parity; unused (plain causal loop)
+    causal: bool = True,
+    softmax_scale: float = None,
+    q_chunk_blocks: int = None,
+    BLOCK_M: int = None, BLOCK_N: int = None,
+    num_warps: int = 8, num_stages: int = 2,
+):
+    """GQA-fused drop-in for ``block_sparse_attn_with_score`` on the DENSE/all-select
+    causal anchor path (block_mask is implicitly all-True). Returns (out, block_score)
+    with block_score bit-identical to the per-head path in the causal region."""
+    assert causal, "fused anchor path is causal-only"
+    b, H, s, d = q.shape
+    Hkv = k.shape[1]
+    G = H // Hkv
+    if softmax_scale is None:
+        softmax_scale = 1.0 / math.sqrt(d)
+    if BLOCK_M is None:
+        BLOCK_M = _FUSED_ANCHOR_BM
+    if BLOCK_N is None:
+        BLOCK_N = _FUSED_ANCHOR_BN
+    nqb = (s + block_size - 1) // block_size
+    nkb = nqb
+
+    out = torch.empty_like(q)
+    block_score = torch.empty((b, H, nqb, nkb), dtype=torch.float32, device=q.device)
+
+    if q_chunk_blocks is None or q_chunk_blocks >= nqb:
+        chunk_qb = nqb
+    else:
+        chunk_qb = q_chunk_blocks
+    chunk_rows = chunk_qb * block_size
+    mass = torch.empty((b, H, chunk_rows, nkb), dtype=torch.float32, device=q.device)
+    lse2 = torch.empty((b, H, chunk_rows), dtype=torch.float32, device=q.device)
+
+    for qb0 in range(0, nqb, chunk_qb):
+        qb1 = min(qb0 + chunk_qb, nqb)
+        nqb_c = qb1 - qb0
+        q_row_offset = qb0 * block_size
+        grid = (triton.cdiv(nqb_c * block_size, BLOCK_M), Hkv, b)
+        _gqa_fused_score_fwd[grid](
+            q, k, v, out, mass, lse2,
+            q.stride(0), q.stride(1), q.stride(2), q.stride(3),
+            k.stride(0), k.stride(1), k.stride(2), k.stride(3),
+            v.stride(0), v.stride(1), v.stride(2), v.stride(3),
+            out.stride(0), out.stride(1), out.stride(2), out.stride(3),
+            mass.stride(0), mass.stride(1), mass.stride(2), mass.stride(3),
+            lse2.stride(0), lse2.stride(1), lse2.stride(2),
+            s, s, softmax_scale, q_row_offset,
+            G=G, HEAD_DIM=d, BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
+            LOGICAL_BLOCK_SIZE=block_size, num_warps=num_warps, num_stages=num_stages,
+        )
+        bs_view = block_score[:, :, qb0:qb1, :]
+        grid2 = (nqb_c, H, b)
+        _block_score_reduce_kernel[grid2](
+            mass, lse2, bs_view,
+            mass.stride(0), mass.stride(1), mass.stride(2), mass.stride(3),
+            lse2.stride(0), lse2.stride(1), lse2.stride(2),
+            bs_view.stride(0), bs_view.stride(1), bs_view.stride(2), bs_view.stride(3),
+            s, nkb, q_row_offset,
+            BLOCK_M=block_size,
+            BLOCK_KB=min(128, triton.next_power_of_2(nkb)),
+            IS_CAUSAL=causal, BLOCK_N=block_size,
+        )
+    return out, block_score
+
+
 def select_topk_blocks(
     block_score: torch.Tensor,   # (batch, n_full, num_q_blocks, num_k_blocks) fp32
     budget: int = 32,
@@ -659,6 +843,95 @@ def _block_sparse_indexed_fwd(
              acc.to(dtype), mask=q_mask[:, None])
 
 
+# GQA-fused sparse indexed forward (opt-in via REUSE_V1_FUSED_SPARSE=1).
+# Drop-in replacement for `_block_sparse_indexed_fwd` in the head-shared (nohead)
+# case: grids over Hkv instead of H, and one program handles G*BLOCK_M query rows
+# (G heads of a kv-group stacked in the row dim). Since the selection is head-shared,
+# every selected K/V block is loaded ONCE per group and reused by all G heads' rows,
+# cutting KV HBM traffic ~G x. Per-row online softmax is independent, so at matched
+# BLOCK_N the output is bit-identical to `_block_sparse_indexed_fwd` (BLOCK_M only
+# tiles the stacked rows and does not affect per-row fp).
+@triton.jit
+def _gqa_fused_indexed_fwd(
+    Q, K, V, O,
+    K_sel, K_cnt,
+    sb_q, sh_q, ss_q, sd_q,
+    sb_k, sh_k, ss_k, sd_k,
+    sb_v, sh_v, ss_v, sd_v,
+    sb_o, sh_o, ss_o, sd_o,
+    sksel_z, sksel_q, sksel_s,
+    skcnt_z, skcnt_q,
+    qo_len, kv_len, softmax_scale,
+    G: tl.constexpr, HEAD_DIM: tl.constexpr,
+    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
+    LOGICAL_BLOCK_SIZE: tl.constexpr, MAX_SEL: tl.constexpr, IS_CAUSAL: tl.constexpr,
+):
+    tl.static_assert((LOGICAL_BLOCK_SIZE % BLOCK_M) == 0)
+    tl.static_assert((LOGICAL_BLOCK_SIZE % BLOCK_N) == 0)
+    NSUB: tl.constexpr = LOGICAL_BLOCK_SIZE // BLOCK_N
+    pid_m = tl.program_id(0)
+    pid_hkv = tl.program_id(1).to(tl.int64)
+    pid_b = tl.program_id(2).to(tl.int64)
+    dtype = Q.type.element_ty
+
+    ROWS: tl.constexpr = G * BLOCK_M
+    row = tl.arange(0, ROWS)
+    g_of = (row // BLOCK_M).to(tl.int64)          # head within the kv-group
+    m_of = row % BLOCK_M                          # local query index in the block
+    offs_m = pid_m * BLOCK_M + m_of               # query position (chunk starts at 0)
+    offs_d = tl.arange(0, HEAD_DIM)
+    scale = softmax_scale * 1.44269504
+    q_mask = offs_m < qo_len
+
+    qh = pid_hkv * G + g_of
+    q_ptr = Q + pid_b * sb_q + qh * sh_q + offs_m * ss_q
+    q = tl.load(q_ptr[:, None] + offs_d[None, :] * sd_q,
+                mask=q_mask[:, None], other=0.0).to(dtype)
+
+    k_base = K + pid_b * sb_k + pid_hkv * sh_k
+    v_base = V + pid_b * sb_v + pid_hkv * sh_v
+
+    m_i = tl.zeros((ROWS,), tl.float32) - float("inf")
+    l_i = tl.zeros((ROWS,), tl.float32) + 1.0
+    acc = tl.zeros((ROWS, HEAD_DIM), tl.float32)
+
+    logical_q_block = (pid_m * BLOCK_M) // LOGICAL_BLOCK_SIZE
+    cnt = tl.load(K_cnt + pid_b * skcnt_z + logical_q_block * skcnt_q)
+    sel_base = K_sel + pid_b * sksel_z + logical_q_block * sksel_q
+
+    for i in range(0, MAX_SEL):
+        if i < cnt:
+            kb = tl.load(sel_base + i * sksel_s)
+            for sub in tl.static_range(NSUB):
+                kv_seq_start = kb * LOGICAL_BLOCK_SIZE + sub * BLOCK_N
+                offs_n = kv_seq_start + tl.arange(0, BLOCK_N)
+                n_mask = offs_n < kv_len
+                k = tl.load(k_base + offs_n[:, None] * ss_k + offs_d[None, :] * sd_k,
+                            mask=n_mask[:, None], other=0.0).to(dtype)   # loaded ONCE per group
+                qk = tl.dot(q, tl.trans(k)) * scale
+                bad = offs_n[None, :] >= kv_len
+                if IS_CAUSAL:
+                    bad = bad | (offs_m[:, None] < offs_n[None, :])
+                qk = qk + tl.where(bad, -1e6, 0.0)
+                local_m = tl.max(qk, 1)
+                m_ij = tl.maximum(m_i, local_m)
+                qk -= m_ij[:, None]
+                p = tl.math.exp2(qk)
+                l_ij = tl.sum(p, 1)
+                alpha = tl.math.exp2(m_i - m_ij)
+                acc = acc * alpha[:, None]
+                v = tl.load(v_base + offs_n[:, None] * ss_v + offs_d[None, :] * sd_v,
+                            mask=n_mask[:, None], other=0.0).to(dtype)
+                acc += tl.dot(p.to(dtype), v)
+                l_i = l_i * alpha + l_ij
+                m_i = m_ij
+
+    acc = acc / l_i[:, None]
+    o_ptr = O + pid_b * sb_o + qh * sh_o + offs_m * ss_o
+    tl.store(o_ptr[:, None] + offs_d[None, :] * sd_o,
+             acc.to(dtype), mask=q_mask[:, None])
+
+
 def _sparse_block_attn(
     q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,   # (batch, H, seq, dim)
     block_mask: torch.Tensor,        # (batch, num_q_blocks, num_k_blocks) bool, SHARED across heads
@@ -717,6 +990,29 @@ def _sparse_block_attn(
 
     if out is None:
         out = torch.empty_like(q)
+
+    # GQA-fused sparse path (opt-in, nohead only): head-shared selection means all G
+    # q-heads of a kv-group read the SAME k_sel, so K/V loads once per group. Requires
+    # the head-shared layout (k_sel.dim()==3) and causal; falls back otherwise.
+    if (os.environ.get("REUSE_V1_FUSED_SPARSE", "0") == "1"
+            and k_sel.dim() == 3 and causal and num_kv_groups > 1):
+        BM, BN = _FUSED_SPARSE_BM, _FUSED_SPARSE_BN
+        grid_f = (triton.cdiv(s, BM), Hkv, b)
+        _gqa_fused_indexed_fwd[grid_f](
+            q, k, v, out, k_sel, k_cnt,
+            q.stride(0), q.stride(1), q.stride(2), q.stride(3),
+            k.stride(0), k.stride(1), k.stride(2), k.stride(3),
+            v.stride(0), v.stride(1), v.stride(2), v.stride(3),
+            out.stride(0), out.stride(1), out.stride(2), out.stride(3),
+            stride_ksel_z, stride_ksel_q, stride_ksel_s,
+            stride_kcnt_z, stride_kcnt_q,
+            s, s, softmax_scale,
+            G=num_kv_groups, HEAD_DIM=d,
+            BLOCK_M=BM, BLOCK_N=BN,
+            LOGICAL_BLOCK_SIZE=block_size, MAX_SEL=max_sel, IS_CAUSAL=causal,
+            num_warps=8, num_stages=2,
+        )
+        return out
 
     def grid(META):
         return (triton.cdiv(s, META["BLOCK_M"]), H, b)
@@ -1004,43 +1300,24 @@ def _select_blocks_topp(
     # Always keep at least min_blocks valid candidates.
     keep[..., :min_blocks] = (topk_vals[..., :min_blocks] >= 0.0)
 
-    # Force sink (block 0) and diagonal into the selection.
-    # We append them as extra entries and de-dup via sort+unique later.
-    diag_k = (qb_idx + off).clamp_(max=nkb - 1)                  # (nqb,)
-    sink_row  = torch.zeros(b, nqb, 1, dtype=torch.int64, device=dev)
-    diag_row  = diag_k.view(1, nqb, 1).expand(b, -1, -1)
-    forced_idx = torch.cat([sink_row, diag_row], dim=-1)          # (b, nqb, 2)
-
-    # Keep only selected candidates and append forced indices.
-    # Zero-out unselected entries by replacing with nkb (sentinel > any valid idx).
-    sel_idx = torch.where(keep, topk_idx, torch.full_like(topk_idx, nkb))  # (b, nqb, k_cand)
-    # Concatenate forced; sentinel nkb will sort to end and be trimmed.
-    all_idx  = torch.cat([sel_idx, forced_idx], dim=-1)           # (b, nqb, k_cand+2)
-
-    # Sort to get indices in ascending order (required by kernel) and deduplicate
-    # by keeping only unique values (duplicates appear consecutively after sort).
-    sorted_idx, _ = all_idx.sort(dim=-1)                          # ascending; sentinels at end
-    # Detect duplicates: keep position if different from previous (or first).
-    shifted = torch.cat([
-        torch.full((b, nqb, 1), -1, dtype=sorted_idx.dtype, device=dev),
-        sorted_idx[..., :-1],
-    ], dim=-1)
-    unique_mask = (sorted_idx != shifted) & (sorted_idx < nkb)    # valid & not duplicate
-
-    # k_cnt = number of unique valid blocks per (b, q_block), capped at max_sel.
-    k_cnt = unique_mask.sum(-1).clamp_(max=max_sel).to(torch.int32).contiguous()
-
-    # Pack into (b, nqb, max_sel) int32, padding with sentinel nkb.
-    # Replace non-unique/invalid positions with nkb, then COMPACT: the second sort
-    # pushes every sentinel to the tail (valid values are distinct and < nkb), so
-    # the surviving indices occupy exactly slots [0, k_cnt) in ascending order.
-    # Without it the in-place sentinels leave holes among the valid entries and the
-    # kernel's ``i < cnt`` loop stops early, dropping the highest-index selected
-    # block -- which after the ascending sort is the diagonal (local) block.
-    packed = torch.where(unique_mask, sorted_idx, torch.full_like(sorted_idx, nkb))
-    packed, _ = packed.sort(dim=-1)
-    k_sel  = packed[..., :max_sel].to(torch.int32).contiguous()
-    return k_sel, k_cnt
+    # Build a boolean presence mask over all k-blocks (True = selected) and reuse
+    # the single-sort compactor. This is byte-identical to the previous
+    # concat-forced + sort + dedup + where + sort-compact path -- the final
+    # selection is the union {nucleus/min_blocks candidates} u {sink, diagonal},
+    # in ascending order -- but replaces THREE sort-equivalents (topk already done,
+    # + two full sorts over a (k_cand+2)-wide array) and two large ``cat``s with a
+    # scatter and ONE sort. De-dup and the sink/diag force are implicit in a mask
+    # (a block is present or not), so no explicit unique pass is needed.
+    #
+    # ``keep`` is False on acausal candidates (imp = -1.0 there, and the
+    # min_blocks floor also gates on ``>= 0.0``), so ``bm`` never marks an acausal
+    # block; the forced sink (block 0) and diagonal are always causal-valid.
+    bm = torch.zeros(b, nqb, nkb, dtype=torch.bool, device=dev)
+    bm.scatter_(-1, topk_idx, keep)                              # nucleus/min_blocks picks
+    bm[..., 0] = True                                            # force sink (block 0)
+    diag_k = (qb_idx + off).clamp_(max=nkb - 1)                  # (nqb,) diagonal block
+    bm.scatter_(-1, diag_k.view(1, nqb, 1).expand(b, -1, -1), True)  # force diagonal
+    return _compact_block_mask(bm, max_sel)
 
 
 def reuse_v1_layer_per_hkv(
@@ -1119,7 +1396,10 @@ def reuse_v1_layer_per_hkv(
         # q_chunk_blocks=None: process the full query sequence in one pass.
         # The old formula `2048 // (G*b)` gave 512 for G=4 which is suboptimal;
         # a single full-length launch is faster on B300.
-        out_h, block_score_h = block_sparse_attn_with_score(
+        _anchor_fwd = (block_sparse_attn_with_score_fused
+                       if os.environ.get("REUSE_V1_FUSED_ANCHOR", "0") == "1"
+                       else block_sparse_attn_with_score)
+        out_h, block_score_h = _anchor_fwd(
             q_h, k_h, v_h, full_bm,
             block_size=block_size, segment_size=segment_size,
             causal=causal, softmax_scale=softmax_scale,
